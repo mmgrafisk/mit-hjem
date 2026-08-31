@@ -17,6 +17,7 @@ export type Database = {
       budget_categories: {
         Row: {
           archived_at: string | null
+          category_type: string
           color: string | null
           created_at: string
           created_by: string
@@ -29,6 +30,7 @@ export type Database = {
         }
         Insert: {
           archived_at?: string | null
+          category_type?: string
           color?: string | null
           created_at?: string
           created_by: string
@@ -41,6 +43,7 @@ export type Database = {
         }
         Update: {
           archived_at?: string | null
+          category_type?: string
           color?: string | null
           created_at?: string
           created_by?: string
@@ -547,7 +550,29 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      add_budget_category: {
+        Args: {
+          p_budget_ids: string[]
+          p_category_type: string
+          p_color: string
+          p_household_id: string
+          p_name: string
+        }
+        Returns: string
+      }
+      ensure_budget_months: {
+        Args: { p_household_id: string; p_months: string[] }
+        Returns: undefined
+      }
+      update_budget_plans: {
+        Args: {
+          p_amount: number
+          p_budget_ids: string[]
+          p_category_id: string
+          p_household_id: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
@@ -680,4 +705,3 @@ export const Constants = {
     Enums: {},
   },
 } as const
-
