@@ -37,12 +37,18 @@ test("connects account login and household data without privileged keys", async 
 
   assert.match(auth, /signInWithPassword/);
   assert.match(auth, /signUp/);
+  assert.match(auth, /authRedirectUrl/);
+  assert.match(auth, /NEXT_PUBLIC_APP_URL/);
+  assert.match(auth, /error_code/);
+  assert.match(auth, /supabase\.auth\.resend/);
+  assert.match(auth, /Send nyt bekræftelseslink/);
   assert.match(auth, /ensureHousehold/);
   assert.match(auth, /household_members/);
   assert.match(app, /from\("tasks"\)/);
   assert.match(app, /from\("shopping_items"\)/);
   assert.match(client, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
   assert.match(exampleEnv, /sb_publishable_your_key/);
+  assert.match(exampleEnv, /NEXT_PUBLIC_APP_URL/);
   assert.doesNotMatch(`${auth}\n${app}\n${client}\n${exampleEnv}`, /service[_-]?role|secret[_-]?key/i);
 });
 

@@ -9,6 +9,39 @@ import { getSupabaseBrowserClient } from "./supabase-client";
 type AuthMode = "login" | "signup";
 type Household = { id: string; name: string };
 
+function authRedirectUrl() {
+  const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  return new URL("/?auth=confirmed", configuredOrigin || window.location.origin).toString();
+}
+
+function errorMessage(reason: unknown, fallback: string) {
+  const message = reason instanceof Error
+    ? reason.message
+    : typeof reason === "object" && reason !== null && "message" in reason && typeof reason.message === "string"
+      ? reason.message
+      : fallback;
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("invalid login credentials")) return "E-mail eller adgangskode er forkert.";
+  if (normalized.includes("email not confirmed")) return "Bekræft din e-mail, før du logger ind. Du kan få tilsendt et nyt link nedenfor.";
+  if (normalized.includes("otp_expired") || normalized.includes("expired") || normalized.includes("invalid or has expired")) {
+    return "Bekræftelseslinket er udløbet eller allerede brugt. Indtast din e-mail og få tilsendt et nyt link.";
+  }
+  if (normalized.includes("rate limit") || normalized.includes("too many requests")) {
+    return "Der er sendt for mange mails på kort tid. Vent et øjeblik, og prøv igen.";
+  }
+  if (normalized.includes("password should be at least")) return "Adgangskoden skal være på mindst 8 tegn.";
+  return message || fallback;
+}
+
+function readAuthLinkError() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const code = params.get("error_code");
+  const description = params.get("error_description");
+  if (!code && !description) return null;
+  return errorMessage({ message: description || code || "" }, "Bekræftelseslinket kunne ikke bruges.");
+}
+
 function userName(user: User) {
   const candidate = user.user_metadata?.full_name;
   if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
@@ -90,7 +123,8 @@ export function AuthGate() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [authLinkError] = useState(() => typeof window === "undefined" ? null : readAuthLinkError());
+  const [error, setError] = useState<string | null>(authLinkError);
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
@@ -103,22 +137,33 @@ export function AuthGate() {
 
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      setSessionReady(true);
-    });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!active) return;
       setSession(nextSession);
       setHousehold(null);
       setSessionReady(true);
     });
+    if (authLinkError) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      void supabase.auth.signOut({ scope: "local" }).finally(() => {
+        if (!active) return;
+        setSession(null);
+        setHousehold(null);
+        setSessionReady(true);
+      });
+    } else {
+      supabase.auth.getSession().then(({ data, error: sessionError }) => {
+        if (!active) return;
+        if (sessionError) setError(errorMessage(sessionError, "Din session kunne ikke indlæses."));
+        setSession(data.session);
+        setSessionReady(true);
+      });
+    }
     return () => {
       active = false;
       listener.subscription.unsubscribe();
     };
-  }, [supabase]);
+  }, [supabase, authLinkError]);
 
   useEffect(() => {
     if (!session?.user) return;
@@ -126,7 +171,7 @@ export function AuthGate() {
     ensureHousehold(session.user)
       .then((value) => { if (active) setHousehold(value); })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : "Dit hjem kunne ikke åbnes.");
+        if (active) setError(errorMessage(reason, "Dit hjem kunne ikke åbnes."));
       });
     return () => { active = false; };
   }, [session]);
@@ -141,16 +186,43 @@ export function AuthGate() {
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { full_name: fullName.trim() }, emailRedirectTo: window.location.origin },
+          options: { data: { full_name: fullName.trim() }, emailRedirectTo: authRedirectUrl() },
         });
         if (signUpError) throw signUpError;
-        if (!data.session) setMessage("Kontoen er oprettet. Tjek din indbakke og bekræft din e-mail, før du logger ind.");
+        if (!data.session) {
+          setMode("login");
+          setMessage("Kontoen er oprettet. Tjek din indbakke og bekræft din e-mail, før du logger ind.");
+        }
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (signInError) throw signInError;
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Der opstod en fejl. Prøv igen.");
+      setError(errorMessage(reason, "Der opstod en fejl. Prøv igen."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resendConfirmation = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError("Indtast din e-mail først.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: "signup",
+        email: trimmedEmail,
+        options: { emailRedirectTo: authRedirectUrl() },
+      });
+      if (resendError) throw resendError;
+      setMessage("Et nyt bekræftelseslink er sendt. Brug altid det nyeste link i din indbakke.");
+    } catch (reason) {
+      setError(errorMessage(reason, "Bekræftelsesmailen kunne ikke sendes. Prøv igen."));
     } finally {
       setBusy(false);
     }
@@ -204,6 +276,7 @@ export function AuthGate() {
           {error ? <p className="auth-alert error" role="alert">{error}</p> : null}
           {message ? <p className="auth-alert success" role="status">{message}</p> : null}
           <button className="auth-submit" disabled={busy} type="submit">{busy ? <LoaderCircle className="auth-spinner" size={19} /> : null}{mode === "login" ? "Log ind" : "Opret konto"}</button>
+          {mode === "login" ? <button className="auth-secondary" disabled={busy} onClick={() => void resendConfirmation()} type="button">Send nyt bekræftelseslink</button> : null}
         </form>
         <p className="auth-trust">Dine data er private og adskilt fra andre husstande.</p>
       </section>
