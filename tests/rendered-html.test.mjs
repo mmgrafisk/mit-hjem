@@ -23,6 +23,7 @@ test("server-renders the Mit hjem dashboard", async () => {
   assert.match(html, /<html lang="da">/i);
   assert.match(html, /<title>Mit hjem — økonomi og hverdag samlet<\/title>/i);
   assert.match(html, /data-template="command"/);
+  assert.match(html, /data-color-mode="light"/);
   assert.match(html, /Kræver handling/);
   assert.match(html, /Kommende betalinger/);
   assert.match(html, /Eksportér/);
@@ -40,11 +41,16 @@ test("keeps templates, languages and printable exports configurable", async () =
   assert.match(app, /PrintSheets/);
   assert.match(app, /Budget som PDF/);
   assert.match(app, /Madplan som PDF/);
+  assert.match(app, /prefers-color-scheme: dark/);
+  assert.match(app, /mit-hjem:preferences:v1/);
+  assert.match(app, /Vælg udseende/);
   assert.match(config, /defaultTemplate: "command"/);
   assert.match(config, /supportedLanguages/);
   assert.equal((config.match(/^\s*\["[a-z]{2}",/gm) ?? []).length, 18);
   assert.match(css, /data-template="calm"/);
   assert.match(css, /data-template="journal"/);
+  assert.match(css, /data-color-mode="dark"/);
+  assert.match(css, /appearance-grid/);
   assert.match(css, /@media print/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

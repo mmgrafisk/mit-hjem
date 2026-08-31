@@ -14,19 +14,22 @@ import {
   House,
   LayoutDashboard,
   Menu,
+  Monitor,
+  Moon,
   Palette,
   Plus,
   Search,
   Settings,
   ShoppingCart,
   Sparkles,
+  Sun,
   Upload,
   Users,
   UtensilsCrossed,
   WalletCards,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   calendarItems,
   documents,
@@ -53,6 +56,11 @@ type View =
   | "meals"
   | "household"
   | "settings";
+
+type Appearance = "light" | "dark" | "system";
+type ResolvedAppearance = Exclude<Appearance, "system">;
+
+const preferencesStorageKey = "mit-hjem:preferences:v1";
 
 const navItems = [
   ["overview", "Overblik", LayoutDashboard],
@@ -368,11 +376,15 @@ function SettingsView({
   setTemplate,
   language,
   setLanguage,
+  appearance,
+  setAppearance,
 }: {
   template: TemplateName;
   setTemplate: (template: TemplateName) => void;
   language: string;
   setLanguage: (language: string) => void;
+  appearance: Appearance;
+  setAppearance: (appearance: Appearance) => void;
 }) {
   return (
     <div className="settings-page">
@@ -392,6 +404,28 @@ function SettingsView({
       <Panel>
         <div className="settings-heading"><Globe2 size={20} /><span><h2>Sprog</h2><p>Platformen er gjort klar til 18 sprog.</p></span></div>
         <label className="select-field">Visningssprog<select value={language} onChange={(event) => setLanguage(event.target.value)}>{supportedLanguages.map(([code, name]) => <option value={code} key={code}>{name}</option>)}</select></label>
+      </Panel>
+      <Panel>
+        <div className="settings-heading"><Moon size={20} /><span><h2>Udseende</h2><p>Vælg et lyst eller mørkt design, eller følg enhedens indstilling.</p></span></div>
+        <div className="appearance-grid" role="group" aria-label="Vælg udseende">
+          {([
+            ["light", "Lys", Sun],
+            ["dark", "Mørk", Moon],
+            ["system", "System", Monitor],
+          ] as const).map(([key, label, Icon]) => (
+            <button
+              aria-pressed={appearance === key}
+              className={appearance === key ? "selected" : ""}
+              key={key}
+              onClick={() => setAppearance(key)}
+              type="button"
+            >
+              <Icon size={19} />
+              <span><strong>{label}</strong><small>{key === "system" ? "Følger din enhed" : `Brug altid ${label.toLowerCase()} visning`}</small></span>
+              {appearance === key ? <span className="selected-mark"><Check size={13} /></span> : null}
+            </button>
+          ))}
+        </div>
       </Panel>
     </div>
   );
@@ -454,6 +488,9 @@ export function HouseholdApp() {
   const [view, setView] = useState<View>("overview");
   const [template, setTemplate] = useState<TemplateName>(productConfig.defaultTemplate);
   const [language, setLanguage] = useState("da");
+  const [appearance, setAppearance] = useState<Appearance>("system");
+  const [resolvedAppearance, setResolvedAppearance] = useState<ResolvedAppearance>("light");
+  const [preferencesReady, setPreferencesReady] = useState(false);
   const [actions, setActions] = useState(initialActions);
   const [tasks, setTasks] = useState(initialTasks);
   const [shopping, setShopping] = useState(initialShopping);
@@ -461,6 +498,39 @@ export function HouseholdApp() {
   const [mobileMenu, setMobileMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState<"task" | "shopping" | null>(null);
   const [printTarget, setPrintTarget] = useState<"budget" | "meal" | null>(null);
+
+  useEffect(() => {
+    const restorePreferences = window.setTimeout(() => {
+      try {
+        const stored = window.localStorage.getItem(preferencesStorageKey);
+        if (stored) {
+          const preferences = JSON.parse(stored) as { appearance?: Appearance; language?: string; template?: TemplateName };
+          if (["light", "dark", "system"].includes(preferences.appearance ?? "")) setAppearance(preferences.appearance as Appearance);
+          if (supportedLanguages.some(([code]) => code === preferences.language)) setLanguage(preferences.language as string);
+          if (Object.hasOwn(productConfig.templates, preferences.template ?? "")) setTemplate(preferences.template as TemplateName);
+        }
+      } catch {
+        window.localStorage.removeItem(preferencesStorageKey);
+      } finally {
+        setPreferencesReady(true);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(restorePreferences);
+  }, []);
+
+  useEffect(() => {
+    const systemPreference = window.matchMedia("(prefers-color-scheme: dark)");
+    const resolveAppearance = () => setResolvedAppearance(appearance === "system" ? (systemPreference.matches ? "dark" : "light") : appearance);
+    resolveAppearance();
+    systemPreference.addEventListener("change", resolveAppearance);
+    return () => systemPreference.removeEventListener("change", resolveAppearance);
+  }, [appearance]);
+
+  useEffect(() => {
+    if (!preferencesReady) return;
+    window.localStorage.setItem(preferencesStorageKey, JSON.stringify({ appearance, language, template }));
+  }, [appearance, language, preferencesReady, template]);
 
   const title = useMemo(() => navItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view]);
   const toggle = (setter: React.Dispatch<React.SetStateAction<ChecklistItem[]>>) => (id: number) => setter((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
@@ -480,7 +550,7 @@ export function HouseholdApp() {
   };
 
   return (
-    <div className="app-root" data-template={template} data-print-target={printTarget ?? "none"}>
+    <div className="app-root" data-color-mode={resolvedAppearance} data-template={template} data-print-target={printTarget ?? "none"}>
       <aside className={`sidebar ${mobileMenu ? "mobile-open" : ""}`}>
         <div className="brand"><span><House size={19} /></span><strong>{productConfig.name}</strong><ChevronDown size={14} /></div>
         <nav aria-label="Primær navigation">
@@ -501,6 +571,15 @@ export function HouseholdApp() {
               <button className="export-button" onClick={() => setExportOpen((open) => !open)} type="button"><Download size={16} /><span>Eksportér</span><ChevronDown size={13} /></button>
               {exportOpen ? <ExportMenu onExport={exportPdf} /> : null}
             </div>
+            <button
+              aria-label={resolvedAppearance === "dark" ? "Skift til lyst tema" : "Skift til mørkt tema"}
+              className="mode-button"
+              onClick={() => setAppearance(resolvedAppearance === "dark" ? "light" : "dark")}
+              title={resolvedAppearance === "dark" ? "Lyst tema" : "Mørkt tema"}
+              type="button"
+            >
+              {resolvedAppearance === "dark" ? <Sun size={19} /> : <Moon size={19} />}
+            </button>
             <button aria-label={`${actions.length} notifikationer`} className="notification-button" type="button"><Bell size={19} />{actions.length ? <b>{actions.length}</b> : null}</button>
             <button className="profile-button" type="button"><span>AS</span><strong>Anders</strong><ChevronDown size={14} /></button>
           </div>
@@ -510,7 +589,7 @@ export function HouseholdApp() {
           {view === "overview" ? <Overview actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} toggleTask={toggle(setTasks)} toggleShopping={toggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} /> : null}
           {view === "finance" ? <FinanceView /> : null}
           {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} toggleTask={toggle(setTasks)} toggleShopping={toggle(setShopping)} /> : null}
-          {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} /> : null}
+          {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
       </div>
 

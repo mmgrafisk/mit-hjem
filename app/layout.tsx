@@ -1,12 +1,6 @@
 import type { Metadata } from "next";
-import { Geist } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
-
-const geist = Geist({
-  variable: "--font-geist",
-  subsets: ["latin"],
-});
 
 const title = "Mit hjem — økonomi og hverdag samlet";
 const description =
@@ -33,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="da">
-      <body className={geist.variable}>{children}</body>
+      <body>{children}</body>
     </html>
   );
 }
