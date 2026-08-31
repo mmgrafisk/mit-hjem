@@ -38,9 +38,17 @@ import {
   initialShopping,
   initialTasks,
   meals,
-  payments,
   type ChecklistItem,
 } from "./demo-data";
+import {
+  addFinanceTransaction,
+  financeMonthLabel,
+  loadFinance,
+  transactionDateLabel,
+  updatePlannedAmount,
+  type FinanceSnapshot,
+  type NewTransaction,
+} from "./finance-data";
 import {
   productConfig,
   supportedLanguages,
@@ -87,6 +95,27 @@ const currency = new Intl.NumberFormat("da-DK", {
   currency: "DKK",
   maximumFractionDigits: 0,
 });
+
+const demoFinance: FinanceSnapshot = {
+  budgetId: "demo-budget",
+  month: "2025-05-01",
+  incomeTarget: 32000,
+  spendingTarget: 23000,
+  spent: 14562,
+  income: 32000,
+  categories: [
+    { id: "demo-home", budgetItemId: "demo-home-item", name: "Bolig", color: "#2158E8", planned: 9000, spent: 7850 },
+    { id: "demo-food", budgetItemId: "demo-food-item", name: "Mad & husholdning", color: "#20A874", planned: 7000, spent: 5240 },
+    { id: "demo-transport", budgetItemId: "demo-transport-item", name: "Transport", color: "#8267DF", planned: 3500, spent: 900 },
+    { id: "demo-insurance", budgetItemId: "demo-insurance-item", name: "Forsikring", color: "#FF9A5C", planned: 1500, spent: 572 },
+    { id: "demo-leisure", budgetItemId: "demo-leisure-item", name: "Fritid", color: "#D85B8C", planned: 2000, spent: 0 },
+  ],
+  transactions: [
+    { id: "demo-1", merchant: "Norlys", amount: 499, direction: "expense", occurredOn: "2025-05-23", categoryId: "demo-home", categoryName: "Bolig" },
+    { id: "demo-2", merchant: "Rema 1000", amount: 236.75, direction: "expense", occurredOn: "2025-05-19", categoryId: "demo-food", categoryName: "Mad & husholdning" },
+    { id: "demo-3", merchant: "Løn", amount: 32000, direction: "income", occurredOn: "2025-05-01", categoryId: null, categoryName: "Indtægt" },
+  ],
+};
 
 function Panel({
   children,
@@ -141,39 +170,41 @@ function CheckRow({
   );
 }
 
-function BudgetHero({ onOpen }: { onOpen: () => void }) {
+function BudgetHero({ finance, onOpen }: { finance: FinanceSnapshot; onOpen: () => void }) {
+  const remaining = finance.spendingTarget - finance.spent;
+  const percent = finance.spendingTarget > 0 ? Math.min(100, Math.round((finance.spent / finance.spendingTarget) * 100)) : 0;
   return (
     <section className="budget-hero">
       <div className="budget-heading">
         <span>Økonomi</span>
         <i />
-        <button type="button">Denne måned <ChevronDown size={14} /></button>
+        <button type="button" onClick={onOpen}>{financeMonthLabel(finance.month)} <ChevronDown size={14} /></button>
       </div>
       <div className="budget-overview">
         <div>
           <small>Forbrug</small>
-          <strong>14.562 kr.</strong>
-          <span>af 23.000 kr.</span>
+          <strong>{currency.format(finance.spent)}</strong>
+          <span>af {currency.format(finance.spendingTarget)}</span>
         </div>
         <div>
           <small>Tilbage at bruge</small>
-          <strong>8.438 kr.</strong>
-          <span>36% tilbage</span>
+          <strong>{currency.format(remaining)}</strong>
+          <span>{Math.max(0, 100 - percent)}% tilbage</span>
         </div>
-        <div className="progress-ring" aria-label="63 procent af budgettet er brugt">
-          <span>63%</span>
+        <div className="progress-ring" aria-label={`${percent} procent af budgettet er brugt`} style={{ background: `radial-gradient(circle, var(--primary) 55%, transparent 57%), conic-gradient(var(--mint) 0 ${percent}%, rgba(255,255,255,.35) ${percent}% 100%)` }}>
+          <span>{percent}%</span>
         </div>
       </div>
-      <div className="budget-bar"><span /></div>
+      <div className="budget-bar"><span style={{ width: `${percent}%` }} /></div>
       <div className="account-row">
         <button type="button" onClick={onOpen}>
-          <small>Lønkonto</small><strong>23.842 kr.</strong><span>Danske Bank</span>
+          <small>Indtægter</small><strong>{currency.format(finance.income)}</strong><span>Månedens registrerede</span>
         </button>
         <button type="button" onClick={onOpen}>
-          <small>Budgetkonto</small><strong>8.438 kr.</strong><span>Nordea</span>
+          <small>Budget</small><strong>{currency.format(finance.spendingTarget)}</strong><span>Fordelt på kategorier</span>
         </button>
         <button type="button" onClick={onOpen}>
-          <small>Opsparing</small><strong>72.100 kr.</strong><span>Spar Nord</span>
+          <small>Posteringer</small><strong>{finance.transactions.length}</strong><span>Denne måned</span>
         </button>
       </div>
     </section>
@@ -181,6 +212,7 @@ function BudgetHero({ onOpen }: { onOpen: () => void }) {
 }
 
 function Overview({
+  finance,
   actions,
   approve,
   tasks,
@@ -190,6 +222,7 @@ function Overview({
   navigate,
   openAdd,
 }: {
+  finance: FinanceSnapshot;
   actions: typeof initialActions;
   approve: (id: number) => void;
   tasks: ChecklistItem[];
@@ -201,20 +234,21 @@ function Overview({
 }) {
   return (
     <div className="dashboard-grid">
-      <BudgetHero onOpen={() => navigate("finance")} />
+      <BudgetHero finance={finance} onOpen={() => navigate("finance")} />
 
       <Panel className="payments-panel">
-        <SectionTitle title="Kommende betalinger" action="Se alle" onAction={() => navigate("finance")} />
+        <SectionTitle title="Seneste bevægelser" action="Se alle" onAction={() => navigate("finance")} />
         <div className="payment-list">
-          {payments.map((payment) => (
-            <button key={payment.id} type="button" onClick={() => navigate("finance")}>
-              <time>{payment.date}</time>
-              <span><strong>{payment.vendor}</strong><small>{payment.category}</small></span>
-              <b>{currency.format(payment.amount)}</b>
+          {finance.transactions.slice(0, 4).map((transaction) => (
+            <button key={transaction.id} type="button" onClick={() => navigate("finance")}>
+              <time>{transactionDateLabel(transaction.occurredOn)}</time>
+              <span><strong>{transaction.merchant}</strong><small>{transaction.categoryName}</small></span>
+              <b className={transaction.direction === "income" ? "amount-income" : ""}>{transaction.direction === "income" ? "+" : "−"}{currency.format(transaction.amount)}</b>
             </button>
           ))}
+          {finance.transactions.length === 0 ? <button className="finance-empty" type="button" onClick={() => navigate("finance")}><Plus size={16} /><span><strong>Tilføj første postering</strong><small>Indtægt eller udgift</small></span></button> : null}
         </div>
-        <div className="panel-total"><span>I alt kommende</span><strong>2.748 kr.</strong></div>
+        <div className="panel-total"><span>Udgifter denne måned</span><strong>{currency.format(finance.spent)}</strong></div>
       </Panel>
 
       <Panel className="approval-panel">
@@ -295,39 +329,42 @@ function Overview({
   );
 }
 
-function FinanceView() {
+function FinanceView({
+  finance,
+  onAdd,
+  onPlannedChange,
+}: {
+  finance: FinanceSnapshot;
+  onAdd: () => void;
+  onPlannedChange: (categoryId: string, planned: number) => void | Promise<void>;
+}) {
   return (
     <div className="module-layout">
-      <BudgetHero onOpen={() => undefined} />
+      <BudgetHero finance={finance} onOpen={onAdd} />
       <Panel>
         <SectionTitle title="Budget pr. kategori" />
         <div className="category-table">
-          {[
-            ["Bolig", 7850, 9000],
-            ["Mad & husholdning", 5240, 7000],
-            ["Transport", 2350, 3500],
-            ["Forsikring", 1250, 1500],
-            ["Fritid", 1050, 2000],
-          ].map(([name, used, total]) => (
-            <div key={name}>
-              <strong>{name}</strong>
-              <span className="category-progress"><i style={{ width: `${(Number(used) / Number(total)) * 100}%` }} /></span>
-              <span>{currency.format(Number(used))}</span>
-              <small>af {currency.format(Number(total))}</small>
+          {finance.categories.map((category) => (
+            <div key={category.id}>
+              <strong><i className="category-color" style={{ background: category.color }} />{category.name}</strong>
+              <span className="category-progress"><i style={{ width: `${category.planned > 0 ? Math.min(100, (category.spent / category.planned) * 100) : 0}%`, background: category.color }} /></span>
+              <span>{currency.format(category.spent)}</span>
+              <label className="budget-amount-field">af <input aria-label={`Budget for ${category.name}`} defaultValue={category.planned} min="0" onBlur={(event) => void onPlannedChange(category.id, Number(event.target.value))} step="100" type="number" /> kr.</label>
             </div>
           ))}
         </div>
       </Panel>
       <Panel>
-        <SectionTitle title="Seneste bevægelser" />
+        <SectionTitle title="Seneste bevægelser" action="Tilføj postering" onAction={onAdd} />
         <div className="payment-list roomy">
-          {payments.map((payment) => (
-            <button key={payment.id} type="button">
-              <time>{payment.date}</time>
-              <span><strong>{payment.vendor}</strong><small>{payment.category}</small></span>
-              <b>-{currency.format(payment.amount)}</b>
+          {finance.transactions.map((transaction) => (
+            <button key={transaction.id} type="button">
+              <time>{transactionDateLabel(transaction.occurredOn)}</time>
+              <span><strong>{transaction.merchant}</strong><small>{transaction.categoryName}</small></span>
+              <b className={transaction.direction === "income" ? "amount-income" : ""}>{transaction.direction === "income" ? "+" : "−"}{currency.format(transaction.amount)}</b>
             </button>
           ))}
+          {finance.transactions.length === 0 ? <div className="empty-state"><CircleDollarSign size={18} /> Ingen posteringer endnu</div> : null}
         </div>
       </Panel>
     </div>
@@ -474,14 +511,66 @@ function QuickAdd({
   );
 }
 
-function PrintSheets({ tasks, shopping }: { tasks: ChecklistItem[]; shopping: ChecklistItem[] }) {
+function TransactionModal({
+  categories,
+  onClose,
+  onAdd,
+}: {
+  categories: FinanceSnapshot["categories"];
+  onClose: () => void;
+  onAdd: (transaction: NewTransaction) => Promise<boolean>;
+}) {
+  const [merchant, setMerchant] = useState("");
+  const [amount, setAmount] = useState("");
+  const [direction, setDirection] = useState<"expense" | "income">("expense");
+  const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
+  const [occurredOn, setOccurredOn] = useState(new Date().toISOString().slice(0, 10));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <form className="quick-modal transaction-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
+        event.preventDefault();
+        const numericAmount = Number(amount.replace(",", "."));
+        if (!merchant.trim() || !Number.isFinite(numericAmount) || numericAmount <= 0) {
+          setError("Udfyld navn og et gyldigt beløb.");
+          return;
+        }
+        setBusy(true);
+        setError(null);
+        const saved = await onAdd({ merchant: merchant.trim(), amount: numericAmount, direction, occurredOn, categoryId: direction === "expense" ? categoryId || null : null });
+        if (!saved) setError("Posteringen kunne ikke gemmes. Prøv igen.");
+        setBusy(false);
+      }}>
+        <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
+        <span className="modal-icon"><CircleDollarSign size={20} /></span>
+        <div><h2>Ny postering</h2><p className="modal-intro">Registrér en udgift eller indtægt i {financeMonthLabel(new Date().toISOString().slice(0, 7) + "-01").toLowerCase()}.</p></div>
+        <div className="direction-switch">
+          <button className={direction === "expense" ? "active" : ""} onClick={() => setDirection("expense")} type="button">Udgift</button>
+          <button className={direction === "income" ? "active" : ""} onClick={() => setDirection("income")} type="button">Indtægt</button>
+        </div>
+        <div className="transaction-grid">
+          <label className="wide">Navn<input autoFocus maxLength={160} onChange={(event) => setMerchant(event.target.value)} placeholder="Fx Rema 1000 eller løn" required value={merchant} /></label>
+          <label>Beløb<input inputMode="decimal" min="0.01" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" required step="0.01" type="number" value={amount} /></label>
+          <label>Dato<input onChange={(event) => setOccurredOn(event.target.value)} required type="date" value={occurredOn} /></label>
+          {direction === "expense" ? <label className="wide">Kategori<select onChange={(event) => setCategoryId(event.target.value)} required value={categoryId}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label> : null}
+        </div>
+        {error ? <p className="modal-error" role="alert">{error}</p> : null}
+        <button className="primary-button" disabled={busy} type="submit">{busy ? "Gemmer…" : "Gem postering"}</button>
+      </form>
+    </div>
+  );
+}
+
+function PrintSheets({ tasks, shopping, finance, householdName }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; finance: FinanceSnapshot; householdName: string }) {
   return (
     <div className="print-sheets" aria-hidden="true">
       <article className="print-sheet budget-print">
-        <header><span>Mit hjem</span><h1>Budget · Maj 2025</h1><p>Husstanden Sørensen</p></header>
-        <div className="print-summary"><div><small>Budget</small><strong>23.000 kr.</strong></div><div><small>Forbrug</small><strong>14.562 kr.</strong></div><div><small>Tilbage</small><strong>8.438 kr.</strong></div></div>
+        <header><span>Mit hjem</span><h1>Budget · {financeMonthLabel(finance.month)}</h1><p>{householdName}</p></header>
+        <div className="print-summary"><div><small>Budget</small><strong>{currency.format(finance.spendingTarget)}</strong></div><div><small>Forbrug</small><strong>{currency.format(finance.spent)}</strong></div><div><small>Tilbage</small><strong>{currency.format(finance.spendingTarget - finance.spent)}</strong></div></div>
         <h2>Budget pr. kategori</h2>
-        <table><thead><tr><th>Kategori</th><th>Forbrug</th><th>Budget</th></tr></thead><tbody><tr><td>Bolig</td><td>7.850 kr.</td><td>9.000 kr.</td></tr><tr><td>Mad & husholdning</td><td>5.240 kr.</td><td>7.000 kr.</td></tr><tr><td>Transport</td><td>2.350 kr.</td><td>3.500 kr.</td></tr></tbody></table>
+        <table><thead><tr><th>Kategori</th><th>Forbrug</th><th>Budget</th></tr></thead><tbody>{finance.categories.map((category) => <tr key={category.id}><td>{category.name}</td><td>{currency.format(category.spent)}</td><td>{currency.format(category.planned)}</td></tr>)}</tbody></table>
       </article>
       <article className="print-sheet meal-print">
         <header><span>Mit hjem</span><h1>Madplan · Uge 21</h1><p>7 dage · 4 personer</p></header>
@@ -505,11 +594,24 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
   const [actions, setActions] = useState(initialActions);
   const [tasks, setTasks] = useState<ChecklistItem[]>(householdId ? [] : initialTasks);
   const [shopping, setShopping] = useState<ChecklistItem[]>(householdId ? [] : initialShopping);
+  const [finance, setFinance] = useState<FinanceSnapshot>(() => householdId ? {
+    ...demoFinance,
+    budgetId: "",
+    month: new Date().toISOString().slice(0, 7) + "-01",
+    incomeTarget: 0,
+    spendingTarget: 0,
+    spent: 0,
+    income: 0,
+    categories: [],
+    transactions: [],
+  } : demoFinance);
   const [syncState, setSyncState] = useState<SyncState>(householdId ? "loading" : "synced");
   const [exportOpen, setExportOpen] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState<"task" | "shopping" | null>(null);
+  const [transactionOpen, setTransactionOpen] = useState(false);
   const [printTarget, setPrintTarget] = useState<"budget" | "meal" | null>(null);
+  const userId = user?.id;
 
   useEffect(() => {
     const restorePreferences = window.setTimeout(() => {
@@ -551,7 +653,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
     Promise.all([
       supabase.from("tasks").select("id, title, due_at, completed_at").eq("household_id", householdId).order("created_at"),
       supabase.from("shopping_items").select("id, title, quantity, completed_at").eq("household_id", householdId).order("created_at"),
-    ]).then(([taskResult, shoppingResult]) => {
+      userId ? loadFinance(householdId, userId) : Promise.resolve(demoFinance),
+    ]).then(([taskResult, shoppingResult, financeResult]) => {
       if (!active) return;
       if (taskResult.error || shoppingResult.error) {
         setSyncState("error");
@@ -569,10 +672,11 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
         meta: item.quantity ?? undefined,
         done: Boolean(item.completed_at),
       })));
+      setFinance(financeResult);
       setSyncState("synced");
-    });
+    }).catch(() => { if (active) setSyncState("error"); });
     return () => { active = false; };
-  }, [householdId]);
+  }, [householdId, userId]);
 
   const title = useMemo(() => navItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view]);
   const displayName = user?.displayName || "Anders";
@@ -623,6 +727,31 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
     setSyncState("synced");
     setQuickAdd(null);
   };
+  const saveTransaction = async (transaction: NewTransaction) => {
+    if (!householdId || !user) return false;
+    setSyncState("saving");
+    try {
+      await addFinanceTransaction(householdId, user.id, transaction);
+      setFinance(await loadFinance(householdId, user.id));
+      setTransactionOpen(false);
+      setSyncState("synced");
+      return true;
+    } catch {
+      setSyncState("error");
+      return false;
+    }
+  };
+  const savePlannedAmount = async (categoryId: string, planned: number) => {
+    if (!householdId || !user || !Number.isFinite(planned) || planned < 0) return;
+    setSyncState("saving");
+    try {
+      await updatePlannedAmount(householdId, finance, categoryId, planned);
+      setFinance(await loadFinance(householdId, user.id));
+      setSyncState("synced");
+    } catch {
+      setSyncState("error");
+    }
+  };
   const exportPdf = (target: "budget" | "meal") => {
     setExportOpen(false);
     setPrintTarget(target);
@@ -671,8 +800,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
         </header>
 
         <main>
-          {view === "overview" ? <Overview actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} /> : null}
-          {view === "finance" ? <FinanceView /> : null}
+          {view === "overview" ? <Overview finance={finance} actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} /> : null}
+          {view === "finance" ? <FinanceView finance={finance} onAdd={() => setTransactionOpen(true)} onPlannedChange={savePlannedAmount} /> : null}
           {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} /> : null}
           {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
@@ -684,7 +813,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       </nav>
 
       {quickAdd ? <QuickAdd kind={quickAdd} onClose={() => setQuickAdd(null)} onAdd={addItem} /> : null}
-      <PrintSheets tasks={tasks} shopping={shopping} />
+      {transactionOpen ? <TransactionModal categories={finance.categories} onClose={() => setTransactionOpen(false)} onAdd={saveTransaction} /> : null}
+      <PrintSheets tasks={tasks} shopping={shopping} finance={finance} householdName={householdName} />
     </div>
   );
 }

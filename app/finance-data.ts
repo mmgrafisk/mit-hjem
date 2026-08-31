@@ -1,0 +1,260 @@
+import { getSupabaseBrowserClient } from "./supabase-client";
+
+export type FinanceCategory = {
+  id: string;
+  budgetItemId: string;
+  name: string;
+  color: string;
+  planned: number;
+  spent: number;
+};
+
+export type FinanceTransaction = {
+  id: string;
+  merchant: string;
+  amount: number;
+  direction: "expense" | "income";
+  occurredOn: string;
+  categoryId: string | null;
+  categoryName: string;
+};
+
+export type FinanceSnapshot = {
+  budgetId: string;
+  month: string;
+  incomeTarget: number;
+  spendingTarget: number;
+  spent: number;
+  income: number;
+  categories: FinanceCategory[];
+  transactions: FinanceTransaction[];
+};
+
+export type NewTransaction = {
+  merchant: string;
+  amount: number;
+  direction: "expense" | "income";
+  occurredOn: string;
+  categoryId: string | null;
+};
+
+const defaultCategories = [
+  { name: "Bolig", color: "#2158E8", planned: 9000 },
+  { name: "Mad & husholdning", color: "#20A874", planned: 7000 },
+  { name: "Transport", color: "#8267DF", planned: 3500 },
+  { name: "Forsikring", color: "#FF9A5C", planned: 1500 },
+  { name: "Fritid", color: "#D85B8C", planned: 2000 },
+] as const;
+
+function monthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function nextMonthKey(month: string) {
+  const date = new Date(`${month}T12:00:00`);
+  date.setMonth(date.getMonth() + 1);
+  return monthKey(date);
+}
+
+async function ensureCurrentBudget(householdId: string, userId: string) {
+  const supabase = getSupabaseBrowserClient();
+  const currentMonth = monthKey();
+  const existingBudget = await supabase
+    .from("budgets")
+    .select("id, month, income_target, spending_target")
+    .eq("household_id", householdId)
+    .eq("month", currentMonth)
+    .maybeSingle();
+  if (existingBudget.error) throw existingBudget.error;
+
+  const categoriesResult = await supabase
+    .from("budget_categories")
+    .select("id, name, color, sort_order")
+    .eq("household_id", householdId)
+    .is("archived_at", null)
+    .order("sort_order");
+  if (categoriesResult.error) throw categoriesResult.error;
+
+  let categories = categoriesResult.data ?? [];
+  if (categories.length === 0) {
+    const seededCategories = await supabase
+      .from("budget_categories")
+      .insert(defaultCategories.map((category, index) => ({
+        household_id: householdId,
+        created_by: userId,
+        name: category.name,
+        color: category.color,
+        sort_order: index,
+      })))
+      .select("id, name, color, sort_order");
+    if (seededCategories.error) throw seededCategories.error;
+    categories = seededCategories.data ?? [];
+  }
+
+  const currentBudget = existingBudget.data;
+  if (currentBudget) {
+    const defaultAmounts = new Map<string, number>(defaultCategories.map((item) => [item.name, item.planned]));
+    const missingItemsResult = await supabase.from("budget_items").upsert(
+      categories.map((category) => ({
+        household_id: householdId,
+        budget_id: currentBudget.id,
+        category_id: category.id,
+        planned_amount: defaultAmounts.get(category.name) ?? 0,
+      })),
+      { onConflict: "budget_id,category_id", ignoreDuplicates: true },
+    );
+    if (missingItemsResult.error) throw missingItemsResult.error;
+    return { budget: currentBudget, categories };
+  }
+
+  const previousBudgetResult = await supabase
+    .from("budgets")
+    .select("id, month, income_target, spending_target")
+    .eq("household_id", householdId)
+    .lt("month", currentMonth)
+    .order("month", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (previousBudgetResult.error) throw previousBudgetResult.error;
+
+  const previousBudget = previousBudgetResult.data;
+  const createdBudgetResult = await supabase
+    .from("budgets")
+    .upsert({
+      household_id: householdId,
+      created_by: userId,
+      month: currentMonth,
+      name: "Månedsbudget",
+      income_target: previousBudget?.income_target ?? 0,
+      spending_target: previousBudget?.spending_target ?? defaultCategories.reduce((sum, item) => sum + item.planned, 0),
+    }, { onConflict: "household_id,month", ignoreDuplicates: true })
+    .select("id, month, income_target, spending_target")
+    .maybeSingle();
+  if (createdBudgetResult.error) throw createdBudgetResult.error;
+
+  let budget = createdBudgetResult.data;
+  if (!budget) {
+    const concurrentBudget = await supabase
+      .from("budgets")
+      .select("id, month, income_target, spending_target")
+      .eq("household_id", householdId)
+      .eq("month", currentMonth)
+      .single();
+    if (concurrentBudget.error) throw concurrentBudget.error;
+    budget = concurrentBudget.data;
+  }
+
+  let previousAmounts = new Map<string, number>();
+  if (previousBudget) {
+    const previousItems = await supabase
+      .from("budget_items")
+      .select("category_id, planned_amount")
+      .eq("household_id", householdId)
+      .eq("budget_id", previousBudget.id);
+    if (previousItems.error) throw previousItems.error;
+    previousAmounts = new Map((previousItems.data ?? []).map((item) => [item.category_id, Number(item.planned_amount)]));
+  }
+
+  const defaultAmounts = new Map<string, number>(defaultCategories.map((item) => [item.name, item.planned]));
+  const itemsResult = await supabase.from("budget_items").upsert(
+    categories.map((category) => ({
+      household_id: householdId,
+      budget_id: budget.id,
+      category_id: category.id,
+      planned_amount: previousAmounts.get(category.id) ?? defaultAmounts.get(category.name) ?? 0,
+    })),
+    { onConflict: "budget_id,category_id", ignoreDuplicates: true },
+  );
+  if (itemsResult.error) throw itemsResult.error;
+
+  return { budget, categories };
+}
+
+export async function loadFinance(householdId: string, userId: string): Promise<FinanceSnapshot> {
+  const supabase = getSupabaseBrowserClient();
+  const { budget, categories } = await ensureCurrentBudget(householdId, userId);
+  const endMonth = nextMonthKey(budget.month);
+  const [itemsResult, transactionsResult] = await Promise.all([
+    supabase.from("budget_items").select("id, category_id, planned_amount").eq("household_id", householdId).eq("budget_id", budget.id),
+    supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id").eq("household_id", householdId).gte("occurred_on", budget.month).lt("occurred_on", endMonth).eq("status", "approved").order("occurred_on", { ascending: false }).order("created_at", { ascending: false }),
+  ]);
+  if (itemsResult.error) throw itemsResult.error;
+  if (transactionsResult.error) throw transactionsResult.error;
+
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const itemsByCategory = new Map((itemsResult.data ?? []).map((item) => [item.category_id, item]));
+  const transactions: FinanceTransaction[] = (transactionsResult.data ?? []).map((transaction) => ({
+    id: transaction.id,
+    merchant: transaction.merchant,
+    amount: Number(transaction.amount),
+    direction: transaction.direction as "expense" | "income",
+    occurredOn: transaction.occurred_on,
+    categoryId: transaction.category_id,
+    categoryName: transaction.category_id ? categoryById.get(transaction.category_id)?.name ?? "Andet" : transaction.direction === "income" ? "Indtægt" : "Andet",
+  }));
+
+  const categorySpend = new Map<string, number>();
+  for (const transaction of transactions) {
+    if (transaction.direction !== "expense" || !transaction.categoryId) continue;
+    categorySpend.set(transaction.categoryId, (categorySpend.get(transaction.categoryId) ?? 0) + transaction.amount);
+  }
+
+  const financeCategories: FinanceCategory[] = categories.map((category) => {
+    const item = itemsByCategory.get(category.id);
+    return {
+      id: category.id,
+      budgetItemId: item?.id ?? "",
+      name: category.name,
+      color: category.color ?? "#2158E8",
+      planned: Number(item?.planned_amount ?? 0),
+      spent: categorySpend.get(category.id) ?? 0,
+    };
+  });
+  const spendingTarget = financeCategories.reduce((sum, category) => sum + category.planned, 0) || Number(budget.spending_target);
+
+  return {
+    budgetId: budget.id,
+    month: budget.month,
+    incomeTarget: Number(budget.income_target),
+    spendingTarget,
+    spent: transactions.filter((item) => item.direction === "expense").reduce((sum, item) => sum + item.amount, 0),
+    income: transactions.filter((item) => item.direction === "income").reduce((sum, item) => sum + item.amount, 0),
+    categories: financeCategories,
+    transactions,
+  };
+}
+
+export async function addFinanceTransaction(householdId: string, userId: string, transaction: NewTransaction) {
+  const result = await getSupabaseBrowserClient().from("transactions").insert({
+    household_id: householdId,
+    created_by: userId,
+    merchant: transaction.merchant,
+    amount: transaction.amount,
+    direction: transaction.direction,
+    occurred_on: transaction.occurredOn,
+    category_id: transaction.direction === "expense" ? transaction.categoryId : null,
+    source: "manual",
+    status: "approved",
+  });
+  if (result.error) throw result.error;
+}
+
+export async function updatePlannedAmount(householdId: string, snapshot: FinanceSnapshot, categoryId: string, planned: number) {
+  const category = snapshot.categories.find((item) => item.id === categoryId);
+  if (!category?.budgetItemId) throw new Error("Budgetkategorien kunne ikke opdateres.");
+  const supabase = getSupabaseBrowserClient();
+  const itemResult = await supabase.from("budget_items").update({ planned_amount: planned }).eq("id", category.budgetItemId).eq("household_id", householdId);
+  if (itemResult.error) throw itemResult.error;
+  const nextTotal = snapshot.categories.reduce((sum, item) => sum + (item.id === categoryId ? planned : item.planned), 0);
+  const budgetResult = await supabase.from("budgets").update({ spending_target: nextTotal }).eq("id", snapshot.budgetId).eq("household_id", householdId);
+  if (budgetResult.error) throw budgetResult.error;
+}
+
+export function financeMonthLabel(month: string) {
+  const label = new Intl.DateTimeFormat("da-DK", { month: "long", year: "numeric" }).format(new Date(`${month}T12:00:00`));
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+export function transactionDateLabel(date: string) {
+  return new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short" }).format(new Date(`${date}T12:00:00`));
+}

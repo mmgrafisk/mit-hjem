@@ -46,6 +46,23 @@ test("connects account login and household data without privileged keys", async 
   assert.doesNotMatch(`${auth}\n${app}\n${client}\n${exampleEnv}`, /service[_-]?role|secret[_-]?key/i);
 });
 
+test("persists monthly budgets, category plans and transactions", async () => {
+  const [app, finance] = await Promise.all([
+    readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/finance-data.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(finance, /ensureCurrentBudget/);
+  assert.match(finance, /budget_categories/);
+  assert.match(finance, /budget_items/);
+  assert.match(finance, /addFinanceTransaction/);
+  assert.match(finance, /updatePlannedAmount/);
+  assert.match(app, /TransactionModal/);
+  assert.match(app, /finance\.categories\.map/);
+  assert.match(app, /Budget · \{financeMonthLabel\(finance\.month\)\}/);
+  assert.doesNotMatch(finance, /service[_-]?role|secret[_-]?key/i);
+});
+
 test("keeps templates, languages and printable exports configurable", async () => {
   const [app, config, css, packageJson] = await Promise.all([
     readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
