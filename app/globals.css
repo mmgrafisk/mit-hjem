@@ -339,6 +339,10 @@ main { padding: 20px 24px 44px; }
 .transaction-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .transaction-grid .wide { grid-column: 1 / -1; }
 .modal-error { margin: 0; padding: 10px 12px; color: #a12b21; background: #fff1ef; border: 1px solid #ffd5cf; border-radius: 8px; font-size: 13px; }
+.file-drop { position: relative; min-height: 118px; display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: 5px !important; padding: 18px; color: var(--muted); background: var(--surface-soft); border: 1.5px dashed color-mix(in srgb, var(--primary) 45%, var(--line)); border-radius: 11px; cursor: pointer; text-align: center; }
+.file-drop > svg { color: var(--primary); }.file-drop strong { color: var(--ink); font-size: 14px; }.file-drop small { font-size: 12px; }
+.file-drop input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.privacy-note { margin: 0; padding: 10px 12px; color: var(--muted); background: var(--surface-soft); border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .mobile-nav { display: none; }
 .print-sheets { display: none; }
 

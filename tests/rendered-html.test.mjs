@@ -63,6 +63,23 @@ test("persists monthly budgets, category plans and transactions", async () => {
   assert.doesNotMatch(finance, /service[_-]?role|secret[_-]?key/i);
 });
 
+test("keeps household documents private and downloadable through signed links", async () => {
+  const [app, documentData, migration] = await Promise.all([
+    readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/documents-data.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/20260831064746_protect_private_document_storage.sql", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(app, /DocumentUploadModal/);
+  assert.match(app, /Søg i dokumenter/);
+  assert.match(documentData, /household-documents/);
+  assert.match(documentData, /createSignedUrl/);
+  assert.match(documentData, /20 \* 1024 \* 1024/);
+  assert.match(migration, /exists \(/);
+  assert.match(migration, /public\.documents/);
+  assert.doesNotMatch(documentData, /getPublicUrl|service[_-]?role|secret[_-]?key/i);
+});
+
 test("keeps templates, languages and printable exports configurable", async () => {
   const [app, config, css, packageJson] = await Promise.all([
     readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
