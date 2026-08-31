@@ -386,6 +386,9 @@ main { padding: 20px 24px 44px; }
 .quick-modal input:focus, .quick-modal select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent); }
 .quick-modal .primary-button { justify-content: center; }
 .transaction-modal { width: min(520px, 100%); }
+.transaction-modal-actions { display: flex; justify-content: space-between; gap: 10px; }
+.danger-button { min-height: 39px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; color: #b42318; background: color-mix(in srgb, #b42318 9%, var(--surface)); border: 1px solid color-mix(in srgb, #b42318 35%, var(--line)); border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 700; }
+.danger-button:disabled { cursor: wait; opacity: .6; }
 .modal-intro { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .repeat-budget-modal { width: min(500px, 100%); }
 .repeat-budget-modal .eyebrow { color: var(--primary); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -403,6 +406,8 @@ main { padding: 20px 24px 44px; }
 .file-drop input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .privacy-note { margin: 0; padding: 10px 12px; color: var(--muted); background: var(--surface-soft); border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .mobile-nav { display: none; }
+
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 35%, transparent); outline-offset: 2px; }
 .print-sheets { display: none; }
 
 @media (max-width: 1120px) {

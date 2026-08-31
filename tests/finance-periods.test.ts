@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  budgetCategorySummaryTotals,
   budgetEditMonthIndexes,
   budgetPeriodMonthKeys,
   budgetPeriodTotalLabel,
+  isValidFinanceAmount,
+  maximumFinanceAmount,
   shouldPromptForBudgetEdit,
 } from "../app/finance-data";
 
@@ -46,4 +49,22 @@ test("uses the calendar-specific total heading", () => {
   assert.equal(budgetPeriodTotalLabel("calendar"), "Året");
   assert.equal(budgetPeriodTotalLabel("rest-of-year"), "I alt");
   assert.equal(budgetPeriodTotalLabel("rolling-12"), "I alt");
+});
+
+test("groups typed categories without relying on Danish names", () => {
+  assert.deepEqual(budgetCategorySummaryTotals([
+    { categoryType: "fixed_expense", values: [1_000, 1_000] },
+    { categoryType: "saving", values: [500, 500] },
+    { categoryType: "debt", values: [250, 250] },
+    { categoryType: "variable_expense", values: [300, 400] },
+    { categoryType: "uncategorized", values: [50, 0] },
+  ]), { fixed: 3_500, variable: 750 });
+});
+
+test("accepts ørebeløb but rejects negative and oversized finance values", () => {
+  assert.equal(isValidFinanceAmount(236.75), true);
+  assert.equal(isValidFinanceAmount(0), true);
+  assert.equal(isValidFinanceAmount(0, false), false);
+  assert.equal(isValidFinanceAmount(-0.01), false);
+  assert.equal(isValidFinanceAmount(maximumFinanceAmount + 0.01), false);
 });
