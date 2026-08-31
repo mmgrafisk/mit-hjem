@@ -38,6 +38,26 @@ export type NewTransaction = {
   categoryId: string | null;
 };
 
+export type FinanceYearCategory = {
+  id: string;
+  name: string;
+  color: string;
+  budgetItemIds: Array<string | null>;
+  planned: number[];
+  actual: number[];
+};
+
+export type FinanceYearSnapshot = {
+  year: number;
+  budgetIds: string[];
+  incomePlanned: number[];
+  incomeActual: number[];
+  expenseActual: number[];
+  categories: FinanceYearCategory[];
+};
+
+export const financeMonthNames = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"] as const;
+
 const defaultCategories = [
   { name: "Bolig", color: "#2158E8", planned: 9000 },
   { name: "Mad & husholdning", color: "#20A874", planned: 7000 },
@@ -248,6 +268,173 @@ export async function updatePlannedAmount(householdId: string, snapshot: Finance
   const nextTotal = snapshot.categories.reduce((sum, item) => sum + (item.id === categoryId ? planned : item.planned), 0);
   const budgetResult = await supabase.from("budgets").update({ spending_target: nextTotal }).eq("id", snapshot.budgetId).eq("household_id", householdId);
   if (budgetResult.error) throw budgetResult.error;
+}
+
+function yearMonthKey(year: number, monthIndex: number) {
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}-01`;
+}
+
+async function ensureYearBudgets(householdId: string, userId: string, year: number) {
+  const supabase = getSupabaseBrowserClient();
+  const { categories } = await ensureCurrentBudget(householdId, userId);
+  const yearStart = yearMonthKey(year, 0);
+  const nextYearStart = yearMonthKey(year + 1, 0);
+
+  const existingResult = await supabase
+    .from("budgets")
+    .select("id, month, income_target, spending_target")
+    .eq("household_id", householdId)
+    .gte("month", yearStart)
+    .lt("month", nextYearStart)
+    .order("month");
+  if (existingResult.error) throw existingResult.error;
+
+  const existingMonths = new Set((existingResult.data ?? []).map((budget) => budget.month));
+  const missingBudgets = Array.from({ length: 12 }, (_, monthIndex) => monthIndex)
+    .filter((monthIndex) => !existingMonths.has(yearMonthKey(year, monthIndex)))
+    .map((monthIndex) => ({
+      household_id: householdId,
+      created_by: userId,
+      month: yearMonthKey(year, monthIndex),
+      name: `${financeMonthNames[monthIndex]} ${year}`,
+      income_target: 0,
+      spending_target: defaultCategories.reduce((sum, item) => sum + item.planned, 0),
+    }));
+  if (missingBudgets.length) {
+    const createdResult = await supabase.from("budgets").upsert(missingBudgets, { onConflict: "household_id,month", ignoreDuplicates: true });
+    if (createdResult.error) throw createdResult.error;
+  }
+
+  const budgetsResult = await supabase
+    .from("budgets")
+    .select("id, month, income_target, spending_target")
+    .eq("household_id", householdId)
+    .gte("month", yearStart)
+    .lt("month", nextYearStart)
+    .order("month");
+  if (budgetsResult.error) throw budgetsResult.error;
+  const budgets = budgetsResult.data ?? [];
+  const budgetIds = budgets.map((budget) => budget.id);
+
+  const itemsResult = budgetIds.length
+    ? await supabase.from("budget_items").select("id, budget_id, category_id, planned_amount").eq("household_id", householdId).in("budget_id", budgetIds)
+    : { data: [], error: null };
+  if (itemsResult.error) throw itemsResult.error;
+
+  const existingItems = itemsResult.data ?? [];
+  const existingPairs = new Set(existingItems.map((item) => `${item.budget_id}:${item.category_id}`));
+  const fallbackByCategory = new Map<string, number>();
+  for (const item of existingItems) {
+    if (!fallbackByCategory.has(item.category_id)) fallbackByCategory.set(item.category_id, Number(item.planned_amount));
+  }
+  const defaultsByName = new Map<string, number>(defaultCategories.map((item) => [item.name, item.planned]));
+  const missingItems = budgets.flatMap((budget) => categories
+    .filter((category) => !existingPairs.has(`${budget.id}:${category.id}`))
+    .map((category) => ({
+      household_id: householdId,
+      budget_id: budget.id,
+      category_id: category.id,
+      planned_amount: fallbackByCategory.get(category.id) ?? defaultsByName.get(category.name) ?? 0,
+    })));
+  if (missingItems.length) {
+    const createdItems = await supabase.from("budget_items").upsert(missingItems, { onConflict: "budget_id,category_id", ignoreDuplicates: true });
+    if (createdItems.error) throw createdItems.error;
+  }
+
+  return { budgets, categories };
+}
+
+export async function loadFinanceYear(householdId: string, userId: string, year: number): Promise<FinanceYearSnapshot> {
+  const supabase = getSupabaseBrowserClient();
+  const { budgets, categories } = await ensureYearBudgets(householdId, userId, year);
+  const budgetByMonth = new Map(budgets.map((budget) => [Number(budget.month.slice(5, 7)) - 1, budget]));
+  const budgetIds = Array.from({ length: 12 }, (_, monthIndex) => budgetByMonth.get(monthIndex)?.id ?? "");
+  const yearStart = `${year}-01-01`;
+  const nextYearStart = `${year + 1}-01-01`;
+
+  const [itemsResult, transactionsResult] = await Promise.all([
+    supabase.from("budget_items").select("id, budget_id, category_id, planned_amount").eq("household_id", householdId).in("budget_id", budgetIds.filter(Boolean)),
+    supabase.from("transactions").select("amount, direction, occurred_on, category_id").eq("household_id", householdId).gte("occurred_on", yearStart).lt("occurred_on", nextYearStart).eq("status", "approved"),
+  ]);
+  if (itemsResult.error) throw itemsResult.error;
+  if (transactionsResult.error) throw transactionsResult.error;
+
+  const budgetMonthById = new Map(budgets.map((budget) => [budget.id, Number(budget.month.slice(5, 7)) - 1]));
+  const itemByPair = new Map((itemsResult.data ?? []).map((item) => [`${item.category_id}:${budgetMonthById.get(item.budget_id)}`, item]));
+  const incomeActual = Array(12).fill(0) as number[];
+  const expenseActual = Array(12).fill(0) as number[];
+  const actualByCategory = new Map<string, number[]>();
+  for (const transaction of transactionsResult.data ?? []) {
+    const monthIndex = Number(transaction.occurred_on.slice(5, 7)) - 1;
+    const amount = Number(transaction.amount);
+    if (transaction.direction === "income") incomeActual[monthIndex] += amount;
+    else {
+      expenseActual[monthIndex] += amount;
+      if (transaction.category_id) {
+        const values = actualByCategory.get(transaction.category_id) ?? Array(12).fill(0) as number[];
+        values[monthIndex] += amount;
+        actualByCategory.set(transaction.category_id, values);
+      }
+    }
+  }
+
+  return {
+    year,
+    budgetIds,
+    incomePlanned: Array.from({ length: 12 }, (_, monthIndex) => Number(budgetByMonth.get(monthIndex)?.income_target ?? 0)),
+    incomeActual,
+    expenseActual,
+    categories: categories.map((category) => ({
+      id: category.id,
+      name: category.name,
+      color: category.color ?? "#2158E8",
+      budgetItemIds: Array.from({ length: 12 }, (_, monthIndex) => itemByPair.get(`${category.id}:${monthIndex}`)?.id ?? null),
+      planned: Array.from({ length: 12 }, (_, monthIndex) => Number(itemByPair.get(`${category.id}:${monthIndex}`)?.planned_amount ?? 0)),
+      actual: actualByCategory.get(category.id) ?? Array(12).fill(0) as number[],
+    })),
+  };
+}
+
+export async function updateYearPlannedAmount(householdId: string, snapshot: FinanceYearSnapshot, categoryId: string, monthIndex: number, planned: number) {
+  const category = snapshot.categories.find((item) => item.id === categoryId);
+  const budgetItemId = category?.budgetItemIds[monthIndex];
+  const budgetId = snapshot.budgetIds[monthIndex];
+  if (!budgetItemId || !budgetId) throw new Error("Budgetposten kunne ikke opdateres.");
+  const supabase = getSupabaseBrowserClient();
+  const itemResult = await supabase.from("budget_items").update({ planned_amount: planned }).eq("id", budgetItemId).eq("household_id", householdId);
+  if (itemResult.error) throw itemResult.error;
+  const spendingTarget = snapshot.categories.reduce((sum, item) => sum + (item.id === categoryId ? planned : item.planned[monthIndex]), 0);
+  const budgetResult = await supabase.from("budgets").update({ spending_target: spendingTarget }).eq("id", budgetId).eq("household_id", householdId);
+  if (budgetResult.error) throw budgetResult.error;
+}
+
+export async function updateYearIncomeTarget(householdId: string, snapshot: FinanceYearSnapshot, monthIndex: number, planned: number) {
+  const budgetId = snapshot.budgetIds[monthIndex];
+  if (!budgetId) throw new Error("Månedsbudgettet kunne ikke opdateres.");
+  const result = await getSupabaseBrowserClient().from("budgets").update({ income_target: planned }).eq("id", budgetId).eq("household_id", householdId);
+  if (result.error) throw result.error;
+}
+
+export async function addFinanceCategory(householdId: string, userId: string, snapshot: FinanceYearSnapshot, name: string) {
+  const supabase = getSupabaseBrowserClient();
+  const categoriesResult = await supabase.from("budget_categories").select("sort_order").eq("household_id", householdId).order("sort_order", { ascending: false }).limit(1);
+  if (categoriesResult.error) throw categoriesResult.error;
+  const colorPalette = ["#2158E8", "#20A874", "#8267DF", "#FF9A5C", "#D85B8C", "#4A7A91"];
+  const createdResult = await supabase.from("budget_categories").insert({
+    household_id: householdId,
+    created_by: userId,
+    name,
+    color: colorPalette[snapshot.categories.length % colorPalette.length],
+    sort_order: Number(categoriesResult.data?.[0]?.sort_order ?? -1) + 1,
+  }).select("id").single();
+  if (createdResult.error) throw createdResult.error;
+  const itemsResult = await supabase.from("budget_items").insert(snapshot.budgetIds.filter(Boolean).map((budgetId) => ({
+    household_id: householdId,
+    budget_id: budgetId,
+    category_id: createdResult.data.id,
+    planned_amount: 0,
+  })));
+  if (itemsResult.error) throw itemsResult.error;
 }
 
 export function financeMonthLabel(month: string) {

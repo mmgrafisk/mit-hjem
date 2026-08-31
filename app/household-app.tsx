@@ -50,12 +50,17 @@ import {
   type HouseholdDocument,
 } from "./documents-data";
 import {
+  addFinanceCategory,
   addFinanceTransaction,
   financeMonthLabel,
+  financeMonthNames,
   loadFinance,
+  loadFinanceYear,
   transactionDateLabel,
-  updatePlannedAmount,
+  updateYearIncomeTarget,
+  updateYearPlannedAmount,
   type FinanceSnapshot,
+  type FinanceYearSnapshot,
   type NewTransaction,
 } from "./finance-data";
 import {
@@ -91,7 +96,7 @@ const preferencesStorageKey = "mit-hjem:preferences:v1";
 
 const navItems = [
   ["overview", "Overblik", LayoutDashboard],
-  ["finance", "Økonomi", WalletCards],
+  ["finance", "Budget", WalletCards],
   ["documents", "Dokumenter", FileText],
   ["tasks", "Opgaver", CheckSquare],
   ["calendar", "Kalender", CalendarDays],
@@ -132,6 +137,31 @@ const demoDocuments: HouseholdDocument[] = [
   { id: "demo-doc-3", title: "Forsikring · Police", kind: "insurance", visibility: "household", mimeType: "application/pdf", sizeBytes: 1240000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-11T09:00:00Z" },
   { id: "demo-doc-4", title: "Lønseddel · Anders", kind: "payslip", visibility: "private", mimeType: "application/pdf", sizeBytes: 242000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-01T08:00:00Z" },
 ];
+
+function createDemoYearFinance(year: number): FinanceYearSnapshot {
+  const plannedByCategory: Record<string, number> = {
+    Bolig: 9000,
+    "Mad & husholdning": 7000,
+    Transport: 3500,
+    Forsikring: 1500,
+    Fritid: 2000,
+  };
+  return {
+    year,
+    budgetIds: Array.from({ length: 12 }, (_, monthIndex) => `demo-budget-${year}-${monthIndex}`),
+    incomePlanned: Array(12).fill(32000),
+    incomeActual: Array.from({ length: 12 }, (_, monthIndex) => monthIndex <= new Date().getMonth() ? 32000 : 0),
+    expenseActual: Array.from({ length: 12 }, (_, monthIndex) => monthIndex <= new Date().getMonth() ? 14562 : 0),
+    categories: demoFinance.categories.map((category) => ({
+      id: category.id,
+      name: category.name,
+      color: category.color,
+      budgetItemIds: Array.from({ length: 12 }, (_, monthIndex) => `${category.budgetItemId}-${monthIndex}`),
+      planned: Array(12).fill(plannedByCategory[category.name] ?? category.planned),
+      actual: Array.from({ length: 12 }, (_, monthIndex) => monthIndex <= new Date().getMonth() ? category.spent : 0),
+    })),
+  };
+}
 
 function Panel({
   children,
@@ -352,44 +382,103 @@ function Overview({
   );
 }
 
+type BudgetMode = "budget" | "actual" | "difference";
+
+const budgetNumber = new Intl.NumberFormat("da-DK", { maximumFractionDigits: 0 });
+
+function sumValues(values: number[]) {
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
 function FinanceView({
-  finance,
-  onAdd,
+  financeYear,
+  onYearChange,
+  onAddTransaction,
+  onAddCategory,
   onPlannedChange,
+  onIncomeChange,
+  onExport,
 }: {
-  finance: FinanceSnapshot;
-  onAdd: () => void;
-  onPlannedChange: (categoryId: string, planned: number) => void | Promise<void>;
+  financeYear: FinanceYearSnapshot;
+  onYearChange: (year: number) => void;
+  onAddTransaction: () => void;
+  onAddCategory: (name: string) => Promise<boolean>;
+  onPlannedChange: (categoryId: string, monthIndex: number, planned: number) => void | Promise<void>;
+  onIncomeChange: (monthIndex: number, planned: number) => void | Promise<void>;
+  onExport: () => void;
 }) {
+  const [mode, setMode] = useState<BudgetMode>("budget");
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const plannedExpenses = Array.from({ length: 12 }, (_, monthIndex) => financeYear.categories.reduce((sum, category) => sum + category.planned[monthIndex], 0));
+  const categoryValues = (planned: number[], actual: number[]) => mode === "budget" ? planned : mode === "actual" ? actual : planned.map((value, monthIndex) => value - actual[monthIndex]);
+  const incomeValues = mode === "budget" ? financeYear.incomePlanned : mode === "actual" ? financeYear.incomeActual : financeYear.incomeActual.map((value, monthIndex) => value - financeYear.incomePlanned[monthIndex]);
+  const expenseValues = mode === "budget" ? plannedExpenses : mode === "actual" ? financeYear.expenseActual : plannedExpenses.map((value, monthIndex) => value - financeYear.expenseActual[monthIndex]);
+  const availableValues = mode === "difference"
+    ? financeYear.incomeActual.map((income, monthIndex) => (income - financeYear.expenseActual[monthIndex]) - (financeYear.incomePlanned[monthIndex] - plannedExpenses[monthIndex]))
+    : incomeValues.map((income, monthIndex) => income - expenseValues[monthIndex]);
+  const fixedCategoryNames = new Set(["Bolig", "Transport", "Forsikring", "Forsikringer", "Abonnementer", "Opsparing"]);
+  const fixedTotal = financeYear.categories.filter((category) => fixedCategoryNames.has(category.name)).reduce((sum, category) => sum + sumValues(categoryValues(category.planned, category.actual)), 0);
+  const variableTotal = sumValues(expenseValues) - fixedTotal;
+  const years = [financeYear.year - 1, financeYear.year, financeYear.year + 1];
+
+  const renderValue = (value: number, label: string, onBlur?: (value: number) => void) => mode === "budget" && onBlur ? (
+    <input
+      aria-label={label}
+      defaultValue={Math.round(value)}
+      key={`${financeYear.year}-${label}-${Math.round(value)}`}
+      min="0"
+      onBlur={(event) => {
+        const next = Number(event.target.value);
+        if (Number.isFinite(next) && next >= 0 && next !== value) onBlur(next);
+      }}
+      step="100"
+      type="number"
+    />
+  ) : <span className={mode === "difference" ? value < 0 ? "negative" : value > 0 ? "positive" : "" : ""}>{budgetNumber.format(Math.round(value))}</span>;
+
   return (
-    <div className="module-layout">
-      <BudgetHero finance={finance} onOpen={onAdd} />
-      <Panel>
-        <SectionTitle title="Budget pr. kategori" />
-        <div className="category-table">
-          {finance.categories.map((category) => (
-            <div key={category.id}>
-              <strong><i className="category-color" style={{ background: category.color }} />{category.name}</strong>
-              <span className="category-progress"><i style={{ width: `${category.planned > 0 ? Math.min(100, (category.spent / category.planned) * 100) : 0}%`, background: category.color }} /></span>
-              <span>{currency.format(category.spent)}</span>
-              <label className="budget-amount-field">af <input aria-label={`Budget for ${category.name}`} defaultValue={category.planned} min="0" onBlur={(event) => void onPlannedChange(category.id, Number(event.target.value))} step="100" type="number" /> kr.</label>
-            </div>
-          ))}
+    <div className="finance-page">
+      <header className="finance-workspace-header">
+        <div><h1>Budget</h1><p>Planlæg hele året og sammenlign med de faktiske posteringer.</p></div>
+        <label className="budget-year-select"><CalendarDays size={18} /><span className="sr-only">Vælg år</span><select aria-label="Vælg budgetår" onChange={(event) => onYearChange(Number(event.target.value))} value={financeYear.year}>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
+        <div className="budget-mode-switch" role="group" aria-label="Budgetvisning">
+          {(["budget", "actual", "difference"] as const).map((value) => <button className={mode === value ? "active" : ""} key={value} onClick={() => setMode(value)} type="button">{{ budget: "Budget", actual: "Faktisk", difference: "Forskel" }[value]}</button>)}
         </div>
-      </Panel>
-      <Panel>
-        <SectionTitle title="Seneste bevægelser" action="Tilføj postering" onAction={onAdd} />
-        <div className="payment-list roomy">
-          {finance.transactions.map((transaction) => (
-            <button key={transaction.id} type="button">
-              <time>{transactionDateLabel(transaction.occurredOn)}</time>
-              <span><strong>{transaction.merchant}</strong><small>{transaction.categoryName}</small></span>
-              <b className={transaction.direction === "income" ? "amount-income" : ""}>{transaction.direction === "income" ? "+" : "−"}{currency.format(transaction.amount)}</b>
-            </button>
-          ))}
-          {finance.transactions.length === 0 ? <div className="empty-state"><CircleDollarSign size={18} /> Ingen posteringer endnu</div> : null}
+        <div className="finance-header-actions">
+          <button className="secondary-button" onClick={onAddTransaction} type="button"><CircleDollarSign size={17} />Ny postering</button>
+          <button className="primary-button" onClick={() => setCategoryOpen(true)} type="button"><Plus size={17} />Tilføj kategori</button>
+          <button className="secondary-button" onClick={onExport} type="button"><Download size={17} />Eksportér PDF</button>
         </div>
-      </Panel>
+      </header>
+
+      <section className="budget-summary" aria-label="Årets budgetoversigt">
+        <div><small>Indtægter</small><strong className="positive">{currency.format(sumValues(incomeValues))}</strong><span>{currency.format(sumValues(incomeValues) / 12)} pr. md.</span></div>
+        <div><small>Faste udgifter</small><strong>{currency.format(fixedTotal)}</strong><span>{currency.format(fixedTotal / 12)} pr. md.</span></div>
+        <div><small>Variable udgifter</small><strong>{currency.format(variableTotal)}</strong><span>{currency.format(variableTotal / 12)} pr. md.</span></div>
+        <div><small>Til rådighed</small><strong className={sumValues(availableValues) < 0 ? "negative" : "positive"}>{currency.format(sumValues(availableValues))}</strong><span>{currency.format(sumValues(availableValues) / 12)} pr. md.</span></div>
+      </section>
+
+      <section className="budget-table-panel">
+        <div className="budget-table-scroll">
+          <table className="budget-sheet">
+            <thead><tr><th>Kategori / post</th>{financeMonthNames.map((month) => <th key={month}>{month}</th>)}<th>Året</th></tr></thead>
+            <tbody>
+              <tr className="budget-group-row"><th>Indtægter</th>{incomeValues.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(incomeValues)))}</td></tr>
+              <tr className="budget-entry-row"><th><span className="budget-row-marker income" />Forventet indtægt</th>{financeYear.incomePlanned.map((planned, monthIndex) => <td key={monthIndex}>{renderValue(mode === "budget" ? planned : incomeValues[monthIndex], `Indtægt ${financeMonthNames[monthIndex]}`, (next) => void onIncomeChange(monthIndex, next))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(incomeValues)))}</td></tr>
+              <tr className="budget-group-row expense"><th>Udgifter</th>{expenseValues.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(expenseValues)))}</td></tr>
+              {financeYear.categories.map((category) => {
+                const values = categoryValues(category.planned, category.actual);
+                return <tr className="budget-entry-row" key={category.id}><th><span className="budget-row-marker" style={{ background: category.color }} />{category.name}</th>{values.map((value, monthIndex) => <td key={monthIndex}>{renderValue(value, `${category.name} ${financeMonthNames[monthIndex]}`, (next) => void onPlannedChange(category.id, monthIndex, next))}</td>)}<td className={mode === "difference" ? sumValues(values) < 0 ? "negative" : "positive" : ""}>{budgetNumber.format(Math.round(sumValues(values)))}</td></tr>;
+              })}
+              <tr className="budget-total-row"><th>Udgifter i alt</th>{expenseValues.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(expenseValues)))}</td></tr>
+              <tr className="budget-available-row"><th>Til rådighed</th>{availableValues.map((value, monthIndex) => <td className={value < 0 ? "negative" : "positive"} key={monthIndex}>{budgetNumber.format(Math.round(value))}</td>)}<td className={sumValues(availableValues) < 0 ? "negative" : "positive"}>{budgetNumber.format(Math.round(sumValues(availableValues)))}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <footer><span>Beløb er i danske kroner (DKK).</span><span>Budget gemmes automatisk, når du forlader et felt.</span></footer>
+      </section>
+
+      {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name) => { const saved = await onAddCategory(name); if (saved) setCategoryOpen(false); return saved; }} /> : null}
     </div>
   );
 }
@@ -543,6 +632,38 @@ function QuickAdd({
   );
 }
 
+function BudgetCategoryModal({
+  onClose,
+  onAdd,
+}: {
+  onClose: () => void;
+  onAdd: (name: string) => Promise<boolean>;
+}) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <form className="quick-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
+        event.preventDefault();
+        if (!name.trim()) return;
+        setBusy(true);
+        setError(null);
+        const saved = await onAdd(name.trim());
+        if (!saved) setError("Kategorien kunne ikke gemmes. Navnet findes måske allerede.");
+        setBusy(false);
+      }}>
+        <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
+        <span className="modal-icon"><Plus size={20} /></span>
+        <div><h2>Ny budgetkategori</h2><p className="modal-intro">Kategorien bliver oprettet i alle årets måneder.</p></div>
+        <label>Kategorinavn<input autoFocus maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="Fx Børnepasning" required value={name} /></label>
+        {error ? <p className="modal-error" role="alert">{error}</p> : null}
+        <button className="primary-button" disabled={busy} type="submit">{busy ? "Gemmer…" : "Tilføj kategori"}</button>
+      </form>
+    </div>
+  );
+}
+
 function TransactionModal({
   categories,
   onClose,
@@ -643,14 +764,21 @@ function DocumentUploadModal({
   );
 }
 
-function PrintSheets({ tasks, shopping, finance, householdName }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; finance: FinanceSnapshot; householdName: string }) {
+function PrintSheets({ tasks, shopping, financeYear, householdName }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; financeYear: FinanceYearSnapshot; householdName: string }) {
+  const expenses = Array.from({ length: 12 }, (_, monthIndex) => financeYear.categories.reduce((sum, category) => sum + category.planned[monthIndex], 0));
+  const available = financeYear.incomePlanned.map((income, monthIndex) => income - expenses[monthIndex]);
   return (
     <div className="print-sheets" aria-hidden="true">
       <article className="print-sheet budget-print">
-        <header><span>Mit hjem</span><h1>Budget · {financeMonthLabel(finance.month)}</h1><p>{householdName}</p></header>
-        <div className="print-summary"><div><small>Budget</small><strong>{currency.format(finance.spendingTarget)}</strong></div><div><small>Forbrug</small><strong>{currency.format(finance.spent)}</strong></div><div><small>Tilbage</small><strong>{currency.format(finance.spendingTarget - finance.spent)}</strong></div></div>
-        <h2>Budget pr. kategori</h2>
-        <table><thead><tr><th>Kategori</th><th>Forbrug</th><th>Budget</th></tr></thead><tbody>{finance.categories.map((category) => <tr key={category.id}><td>{category.name}</td><td>{currency.format(category.spent)}</td><td>{currency.format(category.planned)}</td></tr>)}</tbody></table>
+        <header><span>Mit hjem</span><h1>Årsbudget · {financeYear.year}</h1><p>{householdName}</p></header>
+        <div className="print-summary"><div><small>Indtægter</small><strong>{currency.format(sumValues(financeYear.incomePlanned))}</strong></div><div><small>Udgifter</small><strong>{currency.format(sumValues(expenses))}</strong></div><div><small>Til rådighed</small><strong>{currency.format(sumValues(available))}</strong></div></div>
+        <h2>Budget pr. måned</h2>
+        <table className="print-budget-table"><thead><tr><th>Kategori</th>{financeMonthNames.map((month) => <th key={month}>{month}</th>)}<th>Året</th></tr></thead><tbody>
+          <tr><td>Indtægter</td>{financeYear.incomePlanned.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financeYear.incomePlanned))}</td></tr>
+          {financeYear.categories.map((category) => <tr key={category.id}><td>{category.name}</td>{category.planned.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(category.planned))}</td></tr>)}
+          <tr><td>Udgifter i alt</td>{expenses.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(expenses))}</td></tr>
+          <tr><td>Til rådighed</td>{available.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(available))}</td></tr>
+        </tbody></table>
       </article>
       <article className="print-sheet meal-print">
         <header><span>Mit hjem</span><h1>Madplan · Uge 21</h1><p>7 dage · 4 personer</p></header>
@@ -686,6 +814,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
     categories: [],
     transactions: [],
   } : demoFinance);
+  const [budgetYear, setBudgetYear] = useState(new Date().getFullYear());
+  const [financeYear, setFinanceYear] = useState<FinanceYearSnapshot>(() => createDemoYearFinance(new Date().getFullYear()));
   const [syncState, setSyncState] = useState<SyncState>(householdId ? "loading" : "synced");
   const [exportOpen, setExportOpen] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -736,8 +866,9 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       supabase.from("tasks").select("id, title, due_at, completed_at").eq("household_id", householdId).order("created_at"),
       supabase.from("shopping_items").select("id, title, quantity, completed_at").eq("household_id", householdId).order("created_at"),
       userId ? loadFinance(householdId, userId) : Promise.resolve(demoFinance),
+      userId ? loadFinanceYear(householdId, userId, budgetYear) : Promise.resolve(createDemoYearFinance(budgetYear)),
       loadDocuments(householdId),
-    ]).then(([taskResult, shoppingResult, financeResult, documentsResult]) => {
+    ]).then(([taskResult, shoppingResult, financeResult, financeYearResult, documentsResult]) => {
       if (!active) return;
       if (taskResult.error || shoppingResult.error) {
         setSyncState("error");
@@ -756,11 +887,12 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
         done: Boolean(item.completed_at),
       })));
       setFinance(financeResult);
+      setFinanceYear(financeYearResult);
       setHouseholdDocuments(documentsResult);
       setSyncState("synced");
     }).catch(() => { if (active) setSyncState("error"); });
     return () => { active = false; };
-  }, [householdId, userId]);
+  }, [budgetYear, householdId, userId]);
 
   const title = useMemo(() => navItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view]);
   const displayName = user?.displayName || "Anders";
@@ -816,7 +948,12 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
     setSyncState("saving");
     try {
       await addFinanceTransaction(householdId, user.id, transaction);
-      setFinance(await loadFinance(householdId, user.id));
+      const [nextFinance, nextFinanceYear] = await Promise.all([
+        loadFinance(householdId, user.id),
+        loadFinanceYear(householdId, user.id, budgetYear),
+      ]);
+      setFinance(nextFinance);
+      setFinanceYear(nextFinanceYear);
       setTransactionOpen(false);
       setSyncState("synced");
       return true;
@@ -825,15 +962,54 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       return false;
     }
   };
-  const savePlannedAmount = async (categoryId: string, planned: number) => {
-    if (!householdId || !user || !Number.isFinite(planned) || planned < 0) return;
+  const saveYearPlannedAmount = async (categoryId: string, monthIndex: number, planned: number) => {
+    if (!Number.isFinite(planned) || planned < 0) return;
+    if (!householdId || !user) {
+      setFinanceYear((snapshot) => ({ ...snapshot, categories: snapshot.categories.map((category) => category.id === categoryId ? { ...category, planned: category.planned.map((value, index) => index === monthIndex ? planned : value) } : category) }));
+      return;
+    }
     setSyncState("saving");
     try {
-      await updatePlannedAmount(householdId, finance, categoryId, planned);
-      setFinance(await loadFinance(householdId, user.id));
+      await updateYearPlannedAmount(householdId, financeYear, categoryId, monthIndex, planned);
+      const [nextFinance, nextFinanceYear] = await Promise.all([loadFinance(householdId, user.id), loadFinanceYear(householdId, user.id, budgetYear)]);
+      setFinance(nextFinance);
+      setFinanceYear(nextFinanceYear);
       setSyncState("synced");
     } catch {
       setSyncState("error");
+    }
+  };
+  const saveYearIncome = async (monthIndex: number, planned: number) => {
+    if (!Number.isFinite(planned) || planned < 0) return;
+    if (!householdId || !user) {
+      setFinanceYear((snapshot) => ({ ...snapshot, incomePlanned: snapshot.incomePlanned.map((value, index) => index === monthIndex ? planned : value) }));
+      return;
+    }
+    setSyncState("saving");
+    try {
+      await updateYearIncomeTarget(householdId, financeYear, monthIndex, planned);
+      const [nextFinance, nextFinanceYear] = await Promise.all([loadFinance(householdId, user.id), loadFinanceYear(householdId, user.id, budgetYear)]);
+      setFinance(nextFinance);
+      setFinanceYear(nextFinanceYear);
+      setSyncState("synced");
+    } catch {
+      setSyncState("error");
+    }
+  };
+  const saveFinanceCategory = async (name: string) => {
+    if (!householdId || !user) {
+      setFinanceYear((snapshot) => ({ ...snapshot, categories: [...snapshot.categories, { id: `demo-${Date.now()}`, name, color: "#4A7A91", budgetItemIds: Array(12).fill(null), planned: Array(12).fill(0), actual: Array(12).fill(0) }] }));
+      return true;
+    }
+    setSyncState("saving");
+    try {
+      await addFinanceCategory(householdId, user.id, financeYear, name);
+      setFinanceYear(await loadFinanceYear(householdId, user.id, budgetYear));
+      setSyncState("synced");
+      return true;
+    } catch {
+      setSyncState("error");
+      return false;
     }
   };
   const saveDocument = async (file: File, documentTitle: string, kind: DocumentKind, visibility: DocumentVisibility) => {
@@ -914,7 +1090,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
 
         <main>
           {view === "overview" ? <Overview finance={finance} actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} /> : null}
-          {view === "finance" ? <FinanceView finance={finance} onAdd={() => setTransactionOpen(true)} onPlannedChange={savePlannedAmount} /> : null}
+          {view === "finance" ? <FinanceView financeYear={financeYear} onAddCategory={saveFinanceCategory} onAddTransaction={() => setTransactionOpen(true)} onExport={() => exportPdf("budget")} onIncomeChange={saveYearIncome} onPlannedChange={saveYearPlannedAmount} onYearChange={setBudgetYear} /> : null}
           {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} /> : null}
           {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
@@ -928,7 +1104,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       {quickAdd ? <QuickAdd kind={quickAdd} onClose={() => setQuickAdd(null)} onAdd={addItem} /> : null}
       {transactionOpen ? <TransactionModal categories={finance.categories} onClose={() => setTransactionOpen(false)} onAdd={saveTransaction} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
-      <PrintSheets tasks={tasks} shopping={shopping} finance={finance} householdName={householdName} />
+      <PrintSheets tasks={tasks} shopping={shopping} financeYear={financeYear} householdName={householdName} />
     </div>
   );
 }
