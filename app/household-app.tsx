@@ -13,6 +13,7 @@ import {
   Globe2,
   House,
   LayoutDashboard,
+  LogOut,
   Menu,
   Monitor,
   Moon,
@@ -45,6 +46,7 @@ import {
   supportedLanguages,
   type TemplateName,
 } from "./product-config";
+import { getSupabaseBrowserClient } from "./supabase-client";
 
 type View =
   | "overview"
@@ -59,6 +61,14 @@ type View =
 
 type Appearance = "light" | "dark" | "system";
 type ResolvedAppearance = Exclude<Appearance, "system">;
+type SyncState = "loading" | "synced" | "saving" | "error";
+
+type HouseholdAppProps = {
+  householdId?: string;
+  householdName?: string;
+  user?: { id: string; email: string; displayName: string };
+  onSignOut?: () => void | Promise<void>;
+};
 
 const preferencesStorageKey = "mit-hjem:preferences:v1";
 
@@ -114,7 +124,7 @@ function CheckRow({
   onToggle,
 }: {
   item: ChecklistItem;
-  onToggle: (id: number) => void;
+  onToggle: (id: ChecklistItem["id"]) => void;
 }) {
   return (
     <button
@@ -184,8 +194,8 @@ function Overview({
   approve: (id: number) => void;
   tasks: ChecklistItem[];
   shopping: ChecklistItem[];
-  toggleTask: (id: number) => void;
-  toggleShopping: (id: number) => void;
+  toggleTask: (id: ChecklistItem["id"]) => void;
+  toggleShopping: (id: ChecklistItem["id"]) => void;
   navigate: (view: View) => void;
   openAdd: (kind: "task" | "shopping") => void;
 }) {
@@ -334,8 +344,8 @@ function CollectionView({
   view: Exclude<View, "overview" | "finance" | "settings">;
   tasks: ChecklistItem[];
   shopping: ChecklistItem[];
-  toggleTask: (id: number) => void;
-  toggleShopping: (id: number) => void;
+  toggleTask: (id: ChecklistItem["id"]) => void;
+  toggleShopping: (id: ChecklistItem["id"]) => void;
 }) {
   const labels: Record<typeof view, [string, string]> = {
     documents: ["Dokumenter", "Søg, organiser og forbind husholdningens vigtige papirer."],
@@ -447,17 +457,18 @@ function QuickAdd({
 }: {
   kind: "task" | "shopping";
   onClose: () => void;
-  onAdd: (title: string) => void;
+  onAdd: (title: string) => void | Promise<void>;
 }) {
   const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <form className="quick-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); if (title.trim()) onAdd(title.trim()); }}>
+      <form className="quick-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (!title.trim() || busy) return; setBusy(true); await onAdd(title.trim()); setBusy(false); }}>
         <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
         <span className="modal-icon">{kind === "task" ? <CheckSquare size={20} /> : <ShoppingCart size={20} />}</span>
         <h2>{kind === "task" ? "Ny opgave" : "Tilføj til indkøb"}</h2>
         <label>{kind === "task" ? "Hvad skal gøres?" : "Hvad mangler I?"}<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder={kind === "task" ? "Fx bestil tid til service" : "Fx havregryn"} /></label>
-        <button className="primary-button" type="submit">Tilføj</button>
+        <button className="primary-button" disabled={busy} type="submit">{busy ? "Gemmer…" : "Tilføj"}</button>
       </form>
     </div>
   );
@@ -484,7 +495,7 @@ function PrintSheets({ tasks, shopping }: { tasks: ChecklistItem[]; shopping: Ch
   );
 }
 
-export function HouseholdApp() {
+export function HouseholdApp({ householdId, householdName = "Mit hjem", user, onSignOut }: HouseholdAppProps = {}) {
   const [view, setView] = useState<View>("overview");
   const [template, setTemplate] = useState<TemplateName>(productConfig.defaultTemplate);
   const [language, setLanguage] = useState("da");
@@ -492,8 +503,9 @@ export function HouseholdApp() {
   const [resolvedAppearance, setResolvedAppearance] = useState<ResolvedAppearance>("light");
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [actions, setActions] = useState(initialActions);
-  const [tasks, setTasks] = useState(initialTasks);
-  const [shopping, setShopping] = useState(initialShopping);
+  const [tasks, setTasks] = useState<ChecklistItem[]>(householdId ? [] : initialTasks);
+  const [shopping, setShopping] = useState<ChecklistItem[]>(householdId ? [] : initialShopping);
+  const [syncState, setSyncState] = useState<SyncState>(householdId ? "loading" : "synced");
   const [exportOpen, setExportOpen] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState<"task" | "shopping" | null>(null);
@@ -532,12 +544,83 @@ export function HouseholdApp() {
     window.localStorage.setItem(preferencesStorageKey, JSON.stringify({ appearance, language, template }));
   }, [appearance, language, preferencesReady, template]);
 
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    const supabase = getSupabaseBrowserClient();
+    Promise.all([
+      supabase.from("tasks").select("id, title, due_at, completed_at").eq("household_id", householdId).order("created_at"),
+      supabase.from("shopping_items").select("id, title, quantity, completed_at").eq("household_id", householdId).order("created_at"),
+    ]).then(([taskResult, shoppingResult]) => {
+      if (!active) return;
+      if (taskResult.error || shoppingResult.error) {
+        setSyncState("error");
+        return;
+      }
+      setTasks((taskResult.data ?? []).map((item) => ({
+        id: item.id,
+        title: item.title,
+        meta: item.due_at ? new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short" }).format(new Date(item.due_at)) : "Ikke tildelt",
+        done: Boolean(item.completed_at),
+      })));
+      setShopping((shoppingResult.data ?? []).map((item) => ({
+        id: item.id,
+        title: item.title,
+        meta: item.quantity ?? undefined,
+        done: Boolean(item.completed_at),
+      })));
+      setSyncState("synced");
+    });
+    return () => { active = false; };
+  }, [householdId]);
+
   const title = useMemo(() => navItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view]);
-  const toggle = (setter: React.Dispatch<React.SetStateAction<ChecklistItem[]>>) => (id: number) => setter((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
+  const displayName = user?.displayName || "Anders";
+  const firstName = displayName.split(/\s+/)[0] || displayName;
+  const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "MH";
+  const setLocalToggle = (setter: React.Dispatch<React.SetStateAction<ChecklistItem[]>>) => (id: ChecklistItem["id"]) => setter((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
+  const toggleTask = async (id: ChecklistItem["id"]) => {
+    const current = tasks.find((item) => item.id === id);
+    setTasks((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
+    if (!householdId || typeof id !== "string" || !current) return;
+    setSyncState("saving");
+    const { error } = await getSupabaseBrowserClient().from("tasks").update({ completed_at: current.done ? null : new Date().toISOString() }).eq("id", id).eq("household_id", householdId);
+    if (error) {
+      setTasks((items) => items.map((item) => item.id === id ? current : item));
+      setSyncState("error");
+    } else setSyncState("synced");
+  };
+  const toggleShopping = async (id: ChecklistItem["id"]) => {
+    const current = shopping.find((item) => item.id === id);
+    setShopping((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
+    if (!householdId || typeof id !== "string" || !current) return;
+    setSyncState("saving");
+    const { error } = await getSupabaseBrowserClient().from("shopping_items").update({ completed_at: current.done ? null : new Date().toISOString() }).eq("id", id).eq("household_id", householdId);
+    if (error) {
+      setShopping((items) => items.map((item) => item.id === id ? current : item));
+      setSyncState("error");
+    } else setSyncState("synced");
+  };
   const navigate = (next: View) => { setView(next); setMobileMenu(false); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  const addItem = (title: string) => {
-    if (quickAdd === "task") setTasks((items) => [...items, { id: Date.now(), title, meta: "Ny · Ikke tildelt", done: false }]);
-    if (quickAdd === "shopping") setShopping((items) => [...items, { id: Date.now(), title, done: false }]);
+  const addItem = async (itemTitle: string) => {
+    if (!householdId || !user) {
+      if (quickAdd === "task") setTasks((items) => [...items, { id: Date.now(), title: itemTitle, meta: "Ny · Ikke tildelt", done: false }]);
+      if (quickAdd === "shopping") setShopping((items) => [...items, { id: Date.now(), title: itemTitle, done: false }]);
+      setQuickAdd(null);
+      return;
+    }
+    setSyncState("saving");
+    if (quickAdd === "task") {
+      const { data, error } = await getSupabaseBrowserClient().from("tasks").insert({ household_id: householdId, created_by: user.id, title: itemTitle }).select("id, title, completed_at").single();
+      if (error) { setSyncState("error"); return; }
+      setTasks((items) => [...items, { id: data.id, title: data.title, meta: "Ikke tildelt", done: Boolean(data.completed_at) }]);
+    }
+    if (quickAdd === "shopping") {
+      const { data, error } = await getSupabaseBrowserClient().from("shopping_items").insert({ household_id: householdId, created_by: user.id, title: itemTitle }).select("id, title, quantity, completed_at").single();
+      if (error) { setSyncState("error"); return; }
+      setShopping((items) => [...items, { id: data.id, title: data.title, meta: data.quantity ?? undefined, done: Boolean(data.completed_at) }]);
+    }
+    setSyncState("synced");
     setQuickAdd(null);
   };
   const exportPdf = (target: "budget" | "meal") => {
@@ -557,15 +640,16 @@ export function HouseholdApp() {
           {navItems.map(([key, label, Icon]) => <button className={view === key ? "active" : ""} key={key} onClick={() => navigate(key)} type="button"><Icon size={18} /><span>{label}</span>{key === "documents" ? <b>3</b> : null}</button>)}
         </nav>
         <div className="sidebar-bottom">
-          <button className={view === "household" ? "active" : ""} onClick={() => navigate("household")} type="button"><Users size={18} /><span>Husstanden</span><small>4 medlemmer</small></button>
+          <button className={view === "household" ? "active" : ""} onClick={() => navigate("household")} type="button"><Users size={18} /><span>{householdName}</span><small>{user ? "1 medlem" : "4 medlemmer"}</small></button>
           <button className={view === "settings" ? "active" : ""} onClick={() => navigate("settings")} type="button"><Settings size={18} /><span>Indstillinger</span></button>
+          {onSignOut ? <button onClick={() => void onSignOut()} type="button"><LogOut size={18} /><span>Log ud</span></button> : null}
         </div>
       </aside>
 
       <div className="app-content">
         <header className="topbar">
           <button aria-label="Åbn menu" className="menu-button" onClick={() => setMobileMenu((open) => !open)} type="button"><Menu size={21} /></button>
-          <div><small>{view === "overview" ? "Godmorgen, Anders 👋" : "Mit hjem"}</small><strong>{view === "overview" ? "Her er overblikket over jeres hjem." : title}</strong></div>
+          <div><small>{view === "overview" ? `Godmorgen, ${firstName} 👋` : householdName}</small><strong>{view === "overview" ? "Her er overblikket over jeres hjem." : title}</strong></div>
           <div className="top-actions">
             <div className="export-wrap">
               <button className="export-button" onClick={() => setExportOpen((open) => !open)} type="button"><Download size={16} /><span>Eksportér</span><ChevronDown size={13} /></button>
@@ -581,14 +665,15 @@ export function HouseholdApp() {
               {resolvedAppearance === "dark" ? <Sun size={19} /> : <Moon size={19} />}
             </button>
             <button aria-label={`${actions.length} notifikationer`} className="notification-button" type="button"><Bell size={19} />{actions.length ? <b>{actions.length}</b> : null}</button>
-            <button className="profile-button" type="button"><span>AS</span><strong>Anders</strong><ChevronDown size={14} /></button>
+            {householdId ? <span className={`sync-status ${syncState}`}>{syncState === "loading" ? "Henter…" : syncState === "saving" ? "Gemmer…" : syncState === "error" ? "Synkronisering fejlede" : "Synkroniseret"}</span> : null}
+            <button className="profile-button" type="button"><span>{initials}</span><strong>{firstName}</strong><ChevronDown size={14} /></button>
           </div>
         </header>
 
         <main>
-          {view === "overview" ? <Overview actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} toggleTask={toggle(setTasks)} toggleShopping={toggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} /> : null}
+          {view === "overview" ? <Overview actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} /> : null}
           {view === "finance" ? <FinanceView /> : null}
-          {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} toggleTask={toggle(setTasks)} toggleShopping={toggle(setShopping)} /> : null}
+          {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} /> : null}
           {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
       </div>

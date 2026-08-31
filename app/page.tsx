@@ -1,5 +1,5 @@
-import { HouseholdApp } from "./household-app.tsx";
+import { AuthGate } from "./auth-gate";
 
 export default function Home() {
-  return <HouseholdApp />;
+  return <AuthGate />;
 }

@@ -14,7 +14,7 @@ async function render() {
   );
 }
 
-test("server-renders the Mit hjem dashboard", async () => {
+test("server-renders the authenticated Mit hjem entry point", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -22,12 +22,28 @@ test("server-renders the Mit hjem dashboard", async () => {
   const html = await response.text();
   assert.match(html, /<html lang="da">/i);
   assert.match(html, /<title>Mit hjem — økonomi og hverdag samlet<\/title>/i);
-  assert.match(html, /data-template="command"/);
-  assert.match(html, /data-color-mode="light"/);
-  assert.match(html, /Kræver handling/);
-  assert.match(html, /Kommende betalinger/);
-  assert.match(html, /Eksportér/);
+  assert.match(html, /auth-shell auth-loading/);
+  assert.match(html, /Mit hjem/);
+  assert.match(html, /AuthGate/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
+});
+test("connects account login and household data without privileged keys", async () => {
+  const [auth, app, client, exampleEnv] = await Promise.all([
+    readFile(new URL("../app/auth-gate.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/supabase-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../.env.example", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(auth, /signInWithPassword/);
+  assert.match(auth, /signUp/);
+  assert.match(auth, /ensureHousehold/);
+  assert.match(auth, /household_members/);
+  assert.match(app, /from\("tasks"\)/);
+  assert.match(app, /from\("shopping_items"\)/);
+  assert.match(client, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
+  assert.match(exampleEnv, /sb_publishable_your_key/);
+  assert.doesNotMatch(`${auth}\n${app}\n${client}\n${exampleEnv}`, /service[_-]?role|secret[_-]?key/i);
 });
 
 test("keeps templates, languages and printable exports configurable", async () => {

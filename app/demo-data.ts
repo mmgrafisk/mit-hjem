@@ -15,7 +15,7 @@ export type ActionItem = {
 };
 
 export type ChecklistItem = {
-  id: number;
+  id: number | string;
   title: string;
   meta?: string;
   done: boolean;
