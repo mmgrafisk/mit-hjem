@@ -52,11 +52,14 @@ import {
 import {
   addFinanceCategory,
   addFinanceTransaction,
+  budgetEditMonthIndexes,
   budgetPeriodMonthKeys,
+  budgetPeriodTotalLabel,
   financeMonthLabel,
   financePeriodLabel,
   loadFinance,
   loadFinancePeriod,
+  shouldPromptForBudgetEdit,
   transactionDateLabel,
   updatePeriodIncomeTargets,
   updatePeriodPlannedAmounts,
@@ -517,20 +520,25 @@ function BudgetView({
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 5 }, (_, index) => currentYear - 2 + index);
 
-  const askHowToApply = (edit: PendingBudgetEdit) => setPendingEdit(edit);
   const cancelEdit = () => { setPendingEdit(null); setEditRevision((revision) => revision + 1); };
-  const applyEdit = async (forward: boolean) => {
-    if (!pendingEdit) return;
-    const monthIndexes = forward ? financePeriod.months.map((_, index) => index).slice(pendingEdit.monthIndex) : [pendingEdit.monthIndex];
+  const saveEdit = async (edit: PendingBudgetEdit, forward: boolean) => {
+    const monthIndexes = budgetEditMonthIndexes(financePeriod.months.length, edit.monthIndex, forward);
     setSavingEdit(true);
     try {
-      if (pendingEdit.kind === "income") await onIncomeChange(monthIndexes, pendingEdit.value);
-      else if (pendingEdit.categoryId) await onPlannedChange(pendingEdit.categoryId, monthIndexes, pendingEdit.value);
+      if (edit.kind === "income") await onIncomeChange(monthIndexes, edit.value);
+      else if (edit.categoryId) await onPlannedChange(edit.categoryId, monthIndexes, edit.value);
       setPendingEdit(null);
     } finally {
       setSavingEdit(false);
       setEditRevision((revision) => revision + 1);
     }
+  };
+  const askHowToApply = (edit: PendingBudgetEdit) => {
+    if (shouldPromptForBudgetEdit(edit.monthIndex, financePeriod.months.length)) setPendingEdit(edit);
+    else void saveEdit(edit, false);
+  };
+  const applyEdit = async (forward: boolean) => {
+    if (pendingEdit) await saveEdit(pendingEdit, forward);
   };
 
   const renderValue = (value: number, label: string, edit?: Omit<PendingBudgetEdit, "value">) => mode === "budget" && edit ? (
@@ -576,7 +584,7 @@ function BudgetView({
       <section className="budget-table-panel">
         <div className="budget-table-scroll">
           <table className="budget-sheet" style={{ minWidth: Math.max(860, 210 + (financePeriod.months.length + 1) * 96) }}>
-            <thead><tr><th>Kategori / post</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>I alt</th></tr></thead>
+            <thead><tr><th>Kategori / post</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead>
             <tbody>
               <tr className="budget-group-row"><th>Indtægter</th>{incomeValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(incomeValues)))}</td></tr>
               <tr className="budget-entry-row"><th><span className="budget-row-marker income" />Forventet indtægt</th>{financePeriod.incomePlanned.map((planned, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{renderValue(mode === "budget" ? planned : incomeValues[monthIndex], `Indtægt ${financePeriod.months[monthIndex].label}`, { kind: "income", monthIndex, monthLabel: financePeriod.months[monthIndex].label })}</td>)}<td>{budgetNumber.format(Math.round(sumValues(incomeValues)))}</td></tr>
@@ -901,7 +909,7 @@ function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks:
         <header><span>Mit hjem</span><h1>Budget · {financePeriodLabel(financePeriod)}</h1><p>{householdName}</p></header>
         <div className="print-summary"><div><small>Indtægter</small><strong>{currency.format(sumValues(financePeriod.incomePlanned))}</strong></div><div><small>Udgifter</small><strong>{currency.format(sumValues(expenses))}</strong></div><div><small>Til rådighed</small><strong>{currency.format(sumValues(available))}</strong></div></div>
         <h2>Budget pr. måned</h2>
-        <table className="print-budget-table"><thead><tr><th>Kategori</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>I alt</th></tr></thead><tbody>
+        <table className="print-budget-table"><thead><tr><th>Kategori</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead><tbody>
           <tr><td>Indtægter</td>{financePeriod.incomePlanned.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.incomePlanned))}</td></tr>
           {financePeriod.categories.map((category) => <tr key={category.id}><td>{category.name}</td>{category.planned.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(category.planned))}</td></tr>)}
           <tr><td>Udgifter i alt</td>{expenses.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(expenses))}</td></tr>

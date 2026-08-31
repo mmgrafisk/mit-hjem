@@ -305,6 +305,21 @@ export function budgetPeriodMonthKeys(mode: BudgetPeriodMode, selectedYear: numb
   });
 }
 
+export function budgetEditMonthIndexes(monthCount: number, monthIndex: number, forward: boolean): number[] {
+  if (!Number.isInteger(monthIndex) || monthIndex < 0 || monthIndex >= monthCount) return [];
+  return forward
+    ? Array.from({ length: monthCount - monthIndex }, (_, offset) => monthIndex + offset)
+    : [monthIndex];
+}
+
+export function shouldPromptForBudgetEdit(monthIndex: number, monthCount: number) {
+  return monthIndex >= 0 && monthIndex < monthCount - 1;
+}
+
+export function budgetPeriodTotalLabel(mode: BudgetPeriodMode) {
+  return mode === "calendar" ? "Året" : "I alt";
+}
+
 export function financePeriodLabel(snapshot: FinancePeriodSnapshot) {
   if (snapshot.mode === "calendar") return `Kalenderåret ${snapshot.selectedYear}`;
   if (snapshot.mode === "rest-of-year") return `Resten af ${snapshot.months[0]?.year ?? new Date().getFullYear()}`;

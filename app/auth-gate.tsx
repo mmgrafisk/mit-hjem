@@ -4,14 +4,18 @@ import { CheckCircle2, House, LoaderCircle, LockKeyhole, Mail, Moon, Sun } from 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { HouseholdApp } from "./household-app";
-import { getSupabaseBrowserClient } from "./supabase-client";
+import { getSupabaseBrowserClient, type PublicSupabaseConfig } from "./supabase-client";
 
 type AuthMode = "login" | "signup";
 type Household = { id: string; name: string };
 
-function authRedirectUrl() {
-  const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  return new URL("/?auth=confirmed", configuredOrigin || window.location.origin).toString();
+type AuthGateProps = {
+  appUrl: string | null;
+  supabaseConfig: PublicSupabaseConfig | null;
+};
+
+function authRedirectUrl(appUrl: string | null) {
+  return new URL("/?auth=confirmed", appUrl || window.location.origin).toString();
 }
 
 function errorMessage(reason: unknown, fallback: string) {
@@ -112,8 +116,24 @@ function LoadingScreen({ label = "Åbner dit hjem…" }: { label?: string }) {
   );
 }
 
-export function AuthGate() {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+function ConfigurationErrorScreen() {
+  return (
+    <main className="auth-shell" data-color-mode="dark">
+      <section className="auth-card auth-error-card">
+        <div className="auth-brand"><span><House size={22} /></span><strong>Mit hjem</strong></div>
+        <div className="auth-copy">
+          <small>FORBINDELSESFEJL</small>
+          <h1>Konfigurationen til login mangler</h1>
+          <p>Siden kan ikke forbinde sikkert til login lige nu. Prøv igen senere.</p>
+        </div>
+        <button className="auth-submit" onClick={() => window.location.reload()} type="button">Prøv igen</button>
+      </section>
+    </main>
+  );
+}
+
+function ConfiguredAuthGate({ appUrl, supabaseConfig }: { appUrl: string | null; supabaseConfig: PublicSupabaseConfig }) {
+  const supabase = useMemo(() => getSupabaseBrowserClient(supabaseConfig), [supabaseConfig]);
   const [session, setSession] = useState<Session | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [household, setHousehold] = useState<Household | null>(null);
@@ -186,7 +206,7 @@ export function AuthGate() {
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { full_name: fullName.trim() }, emailRedirectTo: authRedirectUrl() },
+          options: { data: { full_name: fullName.trim() }, emailRedirectTo: authRedirectUrl(appUrl) },
         });
         if (signUpError) throw signUpError;
         if (!data.session) {
@@ -217,7 +237,7 @@ export function AuthGate() {
       const { error: resendError } = await supabase.auth.resend({
         type: "signup",
         email: trimmedEmail,
-        options: { emailRedirectTo: authRedirectUrl() },
+        options: { emailRedirectTo: authRedirectUrl(appUrl) },
       });
       if (resendError) throw resendError;
       setMessage("Et nyt bekræftelseslink er sendt. Brug altid det nyeste link i din indbakke.");
@@ -282,4 +302,9 @@ export function AuthGate() {
       </section>
     </main>
   );
+}
+
+export function AuthGate({ appUrl, supabaseConfig }: AuthGateProps) {
+  if (!supabaseConfig) return <ConfigurationErrorScreen />;
+  return <ConfiguredAuthGate appUrl={appUrl} supabaseConfig={supabaseConfig} />;
 }

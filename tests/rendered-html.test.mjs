@@ -2,16 +2,30 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+const defaultRuntimeEnv = {
+  NEXT_PUBLIC_APP_URL: "https://mit-hjem-samlet.exposprint.chatgpt.site",
+  NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
+};
+
+async function render(runtimeEnv = defaultRuntimeEnv) {
+  const previousEnv = Object.fromEntries(Object.keys(runtimeEnv).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, runtimeEnv);
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-
-  return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
-  );
+  try {
+    const { default: worker } = await import(workerUrl.href);
+    return await worker.fetch(
+      new Request("http://localhost/", { headers: { accept: "text/html" } }),
+      { ...runtimeEnv, ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
+      { waitUntil() {}, passThroughOnException() {} },
+    );
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 test("server-renders the authenticated Mit hjem entry point", async () => {
@@ -28,7 +42,8 @@ test("server-renders the authenticated Mit hjem entry point", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 test("connects account login and household data without privileged keys", async () => {
-  const [auth, app, client, exampleEnv] = await Promise.all([
+  const [page, auth, app, client, exampleEnv] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/auth-gate.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/supabase-client.ts", import.meta.url), "utf8"),
@@ -38,7 +53,8 @@ test("connects account login and household data without privileged keys", async 
   assert.match(auth, /signInWithPassword/);
   assert.match(auth, /signUp/);
   assert.match(auth, /authRedirectUrl/);
-  assert.match(auth, /NEXT_PUBLIC_APP_URL/);
+  assert.match(page, /process\.env/);
+  assert.match(page, /NEXT_PUBLIC_APP_URL/);
   assert.match(auth, /error_code/);
   assert.match(auth, /supabase\.auth\.resend/);
   assert.match(auth, /Send nyt bekræftelseslink/);
@@ -46,10 +62,24 @@ test("connects account login and household data without privileged keys", async 
   assert.match(auth, /household_members/);
   assert.match(app, /from\("tasks"\)/);
   assert.match(app, /from\("shopping_items"\)/);
-  assert.match(client, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
+  assert.match(client, /PublicSupabaseConfig/);
+  assert.doesNotMatch(client, /process\.env\.NEXT_PUBLIC_/);
   assert.match(exampleEnv, /sb_publishable_your_key/);
   assert.match(exampleEnv, /NEXT_PUBLIC_APP_URL/);
   assert.doesNotMatch(`${auth}\n${app}\n${client}\n${exampleEnv}`, /service[_-]?role|secret[_-]?key/i);
+});
+
+test("renders a visible configuration error instead of crashing", async () => {
+  const response = await render({
+    NEXT_PUBLIC_APP_URL: defaultRuntimeEnv.NEXT_PUBLIC_APP_URL,
+    NEXT_PUBLIC_SUPABASE_URL: "",
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
+  });
+
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /FORBINDELSESFEJL/);
+  assert.match(html, /Konfigurationen til login mangler/);
 });
 
 test("persists selectable budget periods, repeat-forward plans and transactions", async () => {
