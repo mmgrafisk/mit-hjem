@@ -264,11 +264,19 @@ main { padding: 20px 24px 44px; }
 .module-layout, .collection-page, .settings-page { max-width: 1120px; margin: 0 auto; }
 .module-layout { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; }
 .module-layout .budget-hero { grid-column: 1 / -1; }
+.finance-area { display: grid; gap: 16px; }
+.finance-tabs { width: fit-content; display: flex; gap: 4px; padding: 4px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 11px; }
+.finance-tabs button { min-height: 38px; padding: 0 18px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 720; }
+.finance-tabs button.active { color: var(--primary); background: var(--surface); box-shadow: 0 2px 8px rgba(20, 31, 53, .08); }
 .finance-page { display: grid; gap: 16px; width: 100%; max-width: 1600px; margin: 0 auto; }
 .finance-workspace-header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .finance-workspace-header > div:first-child { margin-right: 8px; }
 .finance-workspace-header h1 { margin: 0; font-size: 30px; line-height: 1.1; letter-spacing: -.045em; }
 .finance-workspace-header p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+.budget-period-controls { display: flex; gap: 8px; }
+.budget-period-controls > label { min-height: 43px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
+.budget-period-controls select { min-height: 39px; padding: 0 24px 0 0; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: 14px; font-weight: 680; }
+.budget-period-controls .budget-year-select { padding-left: 8px; }
 .budget-year-select { min-height: 43px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
 .budget-year-select select { min-height: 39px; padding: 0 25px 0 0; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: 16px; font-weight: 650; }
 .budget-mode-switch { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
@@ -379,6 +387,11 @@ main { padding: 20px 24px 44px; }
 .quick-modal .primary-button { justify-content: center; }
 .transaction-modal { width: min(520px, 100%); }
 .modal-intro { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.repeat-budget-modal { width: min(500px, 100%); }
+.repeat-budget-modal .eyebrow { color: var(--primary); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.repeat-budget-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.repeat-budget-actions button { min-height: 44px; justify-content: center; }
+.repeat-budget-warning { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .direction-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 5px; background: var(--surface-soft); border-radius: 10px; }
 .direction-switch button { min-height: 38px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; cursor: pointer; font-weight: 700; }
 .direction-switch button.active { color: white; background: var(--primary); }
@@ -435,6 +448,9 @@ main { padding: 20px 24px 44px; }
   .finance-workspace-header { align-items: stretch; }
   .finance-workspace-header > div:first-child { width: 100%; }
   .finance-workspace-header h1 { font-size: 26px; }
+  .budget-period-controls { width: 100%; }
+  .budget-period-controls > label:first-child { flex: 1; }
+  .budget-period-controls select { width: 100%; }
   .budget-year-select { flex: 0 0 116px; }
   .budget-mode-switch { flex: 1; }
   .budget-mode-switch button { padding: 0 10px; }
@@ -453,6 +469,7 @@ main { padding: 20px 24px 44px; }
   .category-table > div > span:not(.category-progress) { grid-column: 2; grid-row: 1; }
   .category-table > div > .budget-amount-field { grid-column: 2; grid-row: 2; }
   .transaction-grid { grid-template-columns: 1fr; }.transaction-grid .wide { grid-column: 1; }
+  .repeat-budget-actions { grid-template-columns: 1fr; }
   .module-intro { margin: 5px 3px 14px; }.module-intro h1 { font-size: 24px; }.module-intro p { font-size: 13px; }
   .toolbar { align-items: stretch; }.toolbar > button { width: 42px; padding: 0; justify-content: center; font-size: 0; }
   .document-list.large button { grid-template-columns: 38px 1fr 16px; }.document-list.large button b { display: none; }

@@ -52,7 +52,7 @@ test("connects account login and household data without privileged keys", async 
   assert.doesNotMatch(`${auth}\n${app}\n${client}\n${exampleEnv}`, /service[_-]?role|secret[_-]?key/i);
 });
 
-test("persists annual budgets, monthly category plans and transactions", async () => {
+test("persists selectable budget periods, repeat-forward plans and transactions", async () => {
   const [app, finance] = await Promise.all([
     readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/finance-data.ts", import.meta.url), "utf8"),
@@ -63,11 +63,17 @@ test("persists annual budgets, monthly category plans and transactions", async (
   assert.match(finance, /budget_items/);
   assert.match(finance, /addFinanceTransaction/);
   assert.match(finance, /loadFinanceYear/);
-  assert.match(finance, /updateYearPlannedAmount/);
-  assert.match(finance, /updateYearIncomeTarget/);
+  assert.match(finance, /budgetPeriodMonthKeys/);
+  assert.match(finance, /loadFinancePeriod/);
+  assert.match(finance, /updatePeriodPlannedAmounts/);
+  assert.match(finance, /updatePeriodIncomeTargets/);
+  assert.match(finance, /"calendar" \| "rest-of-year" \| "rolling-12"/);
   assert.match(app, /TransactionModal/);
-  assert.match(app, /financeYear\.categories\.map/);
-  assert.match(app, /Årsbudget · \{financeYear\.year\}/);
+  assert.match(app, /FinanceOverviewView/);
+  assert.match(app, /Overblik/);
+  assert.match(app, /12 måneder frem/);
+  assert.match(app, /Fra \{pendingEdit\.monthLabel\} og frem/);
+  assert.match(app, /Budget · \{financePeriodLabel\(financePeriod\)\}/);
   assert.doesNotMatch(finance, /service[_-]?role|secret[_-]?key/i);
 });
 
