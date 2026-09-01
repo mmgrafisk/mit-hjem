@@ -494,6 +494,8 @@ export type Database = {
           merchant: string
           note: string | null
           occurred_on: string
+          recurrence_group_id: string | null
+          recurrence_interval_months: number | null
           source: string
           status: string
           updated_at: string
@@ -509,6 +511,8 @@ export type Database = {
           merchant: string
           note?: string | null
           occurred_on?: string
+          recurrence_group_id?: string | null
+          recurrence_interval_months?: number | null
           source?: string
           status?: string
           updated_at?: string
@@ -524,6 +528,8 @@ export type Database = {
           merchant?: string
           note?: string | null
           occurred_on?: string
+          recurrence_group_id?: string | null
+          recurrence_interval_months?: number | null
           source?: string
           status?: string
           updated_at?: string

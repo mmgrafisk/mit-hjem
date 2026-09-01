@@ -21,6 +21,9 @@ export type FinanceTransaction = {
   occurredOn: string;
   categoryId: string | null;
   categoryName: string;
+  status: "approved" | "scheduled";
+  recurrence: TransactionRecurrence;
+  recurrenceGroupId: string | null;
 };
 
 export type FinanceSnapshot = {
@@ -40,7 +43,11 @@ export type NewTransaction = {
   direction: "expense" | "income";
   occurredOn: string;
   categoryId: string | null;
+  recurrence: TransactionRecurrence;
+  status?: "approved" | "scheduled";
 };
+
+export type TransactionRecurrence = "once" | "monthly" | "every_2_months" | "quarterly" | "half_yearly";
 
 export type FinanceYearCategory = {
   id: string;
@@ -84,6 +91,46 @@ export type FinancePeriodSnapshot = {
 
 export const financeMonthNames = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"] as const;
 export const maximumFinanceAmount = 9_999_999_999.99;
+
+const recurrenceIntervals: Record<TransactionRecurrence, number | null> = {
+  once: null,
+  monthly: 1,
+  every_2_months: 2,
+  quarterly: 3,
+  half_yearly: 6,
+};
+
+export function transactionRecurrenceLabel(recurrence: TransactionRecurrence) {
+  return ({
+    once: "Kun denne måned",
+    monthly: "Hver måned",
+    every_2_months: "Hver anden måned",
+    quarterly: "Hvert kvartal",
+    half_yearly: "Hvert halve år",
+  } as const)[recurrence];
+}
+
+function dateKey(year: number, monthIndex: number, day: number) {
+  const lastDay = new Date(year, monthIndex + 1, 0, 12).getDate();
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+}
+
+export function recurringTransactionDates(startDate: string, recurrence: TransactionRecurrence) {
+  const interval = recurrenceIntervals[recurrence];
+  if (!interval) return [startDate];
+  const start = new Date(`${startDate}T12:00:00`);
+  if (Number.isNaN(start.getTime())) return [];
+  return Array.from({ length: Math.floor(11 / interval) + 1 }, (_, index) => {
+    const monthOffset = index * interval;
+    const year = start.getFullYear() + Math.floor((start.getMonth() + monthOffset) / 12);
+    const monthIndex = (start.getMonth() + monthOffset) % 12;
+    return dateKey(year, monthIndex, start.getDate());
+  });
+}
+
+function recurrenceFromInterval(interval: number | null): TransactionRecurrence {
+  return (Object.entries(recurrenceIntervals).find(([, value]) => value === interval)?.[0] as TransactionRecurrence | undefined) ?? "once";
+}
 
 export function isValidFinanceAmount(value: number, allowZero = true) {
   return Number.isFinite(value) && value <= maximumFinanceAmount && (allowZero ? value >= 0 : value > 0);
@@ -237,7 +284,7 @@ export async function loadFinance(householdId: string, userId: string): Promise<
   const endMonth = nextMonthKey(budget.month);
   const [itemsResult, transactionsResult] = await Promise.all([
     supabase.from("budget_items").select("id, category_id, planned_amount").eq("household_id", householdId).eq("budget_id", budget.id),
-    supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id").eq("household_id", householdId).gte("occurred_on", budget.month).lt("occurred_on", endMonth).eq("status", "approved").order("occurred_on", { ascending: false }).order("created_at", { ascending: false }),
+    supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id").eq("household_id", householdId).gte("occurred_on", budget.month).lt("occurred_on", endMonth).in("status", ["approved", "scheduled"]).order("occurred_on", { ascending: false }).order("created_at", { ascending: false }),
   ]);
   if (itemsResult.error) throw itemsResult.error;
   if (transactionsResult.error) throw transactionsResult.error;
@@ -252,11 +299,15 @@ export async function loadFinance(householdId: string, userId: string): Promise<
     occurredOn: transaction.occurred_on,
     categoryId: transaction.category_id,
     categoryName: transaction.category_id ? categoryById.get(transaction.category_id)?.name ?? "Andet" : transaction.direction === "income" ? "Indtægt" : "Andet",
+    status: transaction.status as "approved" | "scheduled",
+    recurrence: recurrenceFromInterval(transaction.recurrence_interval_months),
+    recurrenceGroupId: transaction.recurrence_group_id,
   }));
 
   const categorySpend = new Map<string, number>();
   let uncategorizedSpend = 0;
   for (const transaction of transactions) {
+    if (transaction.status !== "approved") continue;
     if (transaction.direction !== "expense") continue;
     if (!transaction.categoryId) {
       uncategorizedSpend += transaction.amount;
@@ -297,25 +348,31 @@ export async function loadFinance(householdId: string, userId: string): Promise<
     month: budget.month,
     incomeTarget: Number(budget.income_target),
     spendingTarget,
-    spent: transactions.filter((item) => item.direction === "expense").reduce((sum, item) => sum + item.amount, 0),
-    income: transactions.filter((item) => item.direction === "income").reduce((sum, item) => sum + item.amount, 0),
+    spent: transactions.filter((item) => item.status === "approved" && item.direction === "expense").reduce((sum, item) => sum + item.amount, 0),
+    income: transactions.filter((item) => item.status === "approved" && item.direction === "income").reduce((sum, item) => sum + item.amount, 0),
     categories: financeCategories,
     transactions,
   };
 }
 
 export async function addFinanceTransaction(householdId: string, userId: string, transaction: NewTransaction) {
-  const result = await getSupabaseBrowserClient().from("transactions").insert({
+  const dates = recurringTransactionDates(transaction.occurredOn, transaction.recurrence);
+  const recurrenceInterval = recurrenceIntervals[transaction.recurrence];
+  const recurrenceGroupId = recurrenceInterval ? crypto.randomUUID() : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const result = await getSupabaseBrowserClient().from("transactions").insert(dates.map((occurredOn, index) => ({
     household_id: householdId,
     created_by: userId,
     merchant: transaction.merchant,
     amount: transaction.amount,
     direction: transaction.direction,
-    occurred_on: transaction.occurredOn,
+    occurred_on: occurredOn,
     category_id: transaction.direction === "expense" ? transaction.categoryId : null,
+    recurrence_interval_months: recurrenceInterval,
+    recurrence_group_id: recurrenceGroupId,
     source: "manual",
-    status: "approved",
-  });
+    status: index === 0 && occurredOn <= today ? "approved" : "scheduled",
+  })));
   if (result.error) throw result.error;
 }
 
@@ -326,6 +383,7 @@ export async function updateFinanceTransaction(householdId: string, transactionI
     direction: transaction.direction,
     occurred_on: transaction.occurredOn,
     category_id: transaction.direction === "expense" ? transaction.categoryId : null,
+    status: transaction.status ?? "approved",
   }).eq("id", transactionId).eq("household_id", householdId).select("id").single();
   if (result.error) throw result.error;
 }
@@ -333,6 +391,35 @@ export async function updateFinanceTransaction(householdId: string, transactionI
 export async function deleteFinanceTransaction(householdId: string, transactionId: string) {
   const result = await getSupabaseBrowserClient().from("transactions").delete().eq("id", transactionId).eq("household_id", householdId).select("id").single();
   if (result.error) throw result.error;
+}
+
+export async function loadFinanceTransactions(householdId: string, limit = 200): Promise<FinanceTransaction[]> {
+  const supabase = getSupabaseBrowserClient();
+  const [transactionsResult, categoriesResult] = await Promise.all([
+    supabase.from("transactions")
+      .select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id")
+      .eq("household_id", householdId)
+      .in("status", ["approved", "scheduled"])
+      .order("occurred_on", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    supabase.from("budget_categories").select("id, name").eq("household_id", householdId),
+  ]);
+  if (transactionsResult.error) throw transactionsResult.error;
+  if (categoriesResult.error) throw categoriesResult.error;
+  const categoryById = new Map((categoriesResult.data ?? []).map((category) => [category.id, category.name]));
+  return (transactionsResult.data ?? []).map((transaction) => ({
+    id: transaction.id,
+    merchant: transaction.merchant,
+    amount: Number(transaction.amount),
+    direction: transaction.direction as "expense" | "income",
+    occurredOn: transaction.occurred_on,
+    categoryId: transaction.category_id,
+    categoryName: transaction.category_id ? categoryById.get(transaction.category_id) ?? "Andet" : transaction.direction === "income" ? "Indtægt" : "Ikke kategoriseret",
+    status: transaction.status as "approved" | "scheduled",
+    recurrence: recurrenceFromInterval(transaction.recurrence_interval_months),
+    recurrenceGroupId: transaction.recurrence_group_id,
+  }));
 }
 
 export async function updatePlannedAmount(householdId: string, snapshot: FinanceSnapshot, categoryId: string, planned: number) {

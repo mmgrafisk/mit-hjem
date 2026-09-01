@@ -7,7 +7,9 @@ import {
   budgetPeriodTotalLabel,
   isValidFinanceAmount,
   maximumFinanceAmount,
+  recurringTransactionDates,
   shouldPromptForBudgetEdit,
+  transactionRecurrenceLabel,
 } from "../app/finance-data";
 
 test("builds a rolling 12-month period across a year boundary", () => {
@@ -67,4 +69,15 @@ test("accepts ørebeløb but rejects negative and oversized finance values", () 
   assert.equal(isValidFinanceAmount(0, false), false);
   assert.equal(isValidFinanceAmount(-0.01), false);
   assert.equal(isValidFinanceAmount(maximumFinanceAmount + 0.01), false);
+});
+
+test("builds recurring transaction dates through the next 12 months", () => {
+  assert.deepEqual(recurringTransactionDates("2026-01-31", "monthly"), [
+    "2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31", "2026-06-30",
+    "2026-07-31", "2026-08-31", "2026-09-30", "2026-10-31", "2026-11-30", "2026-12-31",
+  ]);
+  assert.deepEqual(recurringTransactionDates("2026-08-15", "quarterly"), ["2026-08-15", "2026-11-15", "2027-02-15", "2027-05-15"]);
+  assert.deepEqual(recurringTransactionDates("2026-08-15", "half_yearly"), ["2026-08-15", "2027-02-15"]);
+  assert.deepEqual(recurringTransactionDates("2026-08-15", "once"), ["2026-08-15"]);
+  assert.equal(transactionRecurrenceLabel("every_2_months"), "Hver anden måned");
 });
