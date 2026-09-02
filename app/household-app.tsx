@@ -2,6 +2,7 @@
 
 import {
   Bell,
+  ArrowLeft,
   CalendarDays,
   Check,
   CheckSquare,
@@ -18,6 +19,7 @@ import {
   Monitor,
   Moon,
   Palette,
+  Pencil,
   Plus,
   Search,
   Settings,
@@ -25,6 +27,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  Repeat2,
   Upload,
   Users,
   UtensilsCrossed,
@@ -63,8 +66,10 @@ import {
   isValidFinanceAmount,
   loadFinance,
   loadFinancePeriod,
+  loadFinanceTransactions,
   shouldPromptForBudgetEdit,
   transactionDateLabel,
+  transactionRecurrenceLabel,
   updateFinanceTransaction,
   updatePeriodIncomeTargets,
   updatePeriodPlannedAmounts,
@@ -75,6 +80,7 @@ import {
   type FinanceTransaction,
   type FinanceCategoryType,
   type NewTransaction,
+  type TransactionRecurrence,
 } from "./finance-data";
 import {
   productConfig,
@@ -97,7 +103,7 @@ type View =
 type Appearance = "light" | "dark" | "system";
 type ResolvedAppearance = Exclude<Appearance, "system">;
 type SyncState = "loading" | "synced" | "saving" | "error";
-type FinanceSection = "overview" | "budget";
+type FinanceSection = "overview" | "budget" | "transactions" | "category";
 
 type HouseholdAppProps = {
   householdId?: string;
@@ -139,9 +145,9 @@ const demoFinance: FinanceSnapshot = {
     { id: "demo-leisure", budgetItemId: "demo-leisure-item", name: "Fritid", color: "#D85B8C", categoryType: "variable_expense", editable: true, planned: 2000, spent: 0 },
   ],
   transactions: [
-    { id: "demo-1", merchant: "Norlys", amount: 499, direction: "expense", occurredOn: "2025-05-23", categoryId: "demo-home", categoryName: "Bolig" },
-    { id: "demo-2", merchant: "Rema 1000", amount: 236.75, direction: "expense", occurredOn: "2025-05-19", categoryId: "demo-food", categoryName: "Mad & husholdning" },
-    { id: "demo-3", merchant: "Løn", amount: 32000, direction: "income", occurredOn: "2025-05-01", categoryId: null, categoryName: "Indtægt" },
+    { id: "demo-1", merchant: "Norlys", amount: 499, direction: "expense", occurredOn: "2025-05-23", categoryId: "demo-home", categoryName: "Bolig", status: "approved", recurrence: "monthly", recurrenceGroupId: "demo-series-1" },
+    { id: "demo-2", merchant: "Rema 1000", amount: 236.75, direction: "expense", occurredOn: "2025-05-19", categoryId: "demo-food", categoryName: "Mad & husholdning", status: "approved", recurrence: "once", recurrenceGroupId: null },
+    { id: "demo-3", merchant: "Løn", amount: 32000, direction: "income", occurredOn: "2025-05-01", categoryId: null, categoryName: "Indtægt", status: "approved", recurrence: "monthly", recurrenceGroupId: "demo-series-2" },
   ],
 };
 
@@ -421,12 +427,20 @@ function FinanceOverviewView({
   finance,
   onOpenBudget,
   onAddTransaction,
+  onAddTransactionForCategory,
+  onAddCategory,
+  onOpenCategory,
+  onOpenTransactions,
   onEditTransaction,
   onPlannedChange,
 }: {
   finance: FinanceSnapshot;
   onOpenBudget: () => void;
   onAddTransaction: () => void;
+  onAddTransactionForCategory: (categoryId: string) => void;
+  onAddCategory: () => void;
+  onOpenCategory: (categoryId: string) => void;
+  onOpenTransactions: () => void;
   onEditTransaction: (transaction: FinanceTransaction) => void;
   onPlannedChange: (categoryId: string, planned: number) => void | Promise<void>;
 }) {
@@ -434,13 +448,13 @@ function FinanceOverviewView({
     <div className="module-layout finance-overview">
       <BudgetHero finance={finance} onOpen={onOpenBudget} />
       <Panel>
-        <SectionTitle title="Budget pr. kategori" action="Åbn budget" onAction={onOpenBudget} />
+        <SectionTitle title="Budget pr. kategori" action="Ny kategori" onAction={onAddCategory} />
         <div className="category-table">
           {finance.categories.map((category) => {
             const percent = category.planned > 0 ? Math.min(100, Math.round((category.spent / category.planned) * 100)) : 0;
             return (
               <div key={category.id}>
-                <strong><i className="category-color" style={{ background: category.color }} />{category.name}</strong>
+                <button className="category-name-button" onClick={() => onOpenCategory(category.id)} type="button"><strong><i className="category-color" style={{ background: category.color }} />{category.name}</strong><ChevronRight size={15} /></button>
                 <span className="category-progress"><i style={{ width: `${percent}%`, background: category.color }} /></span>
                 <span>{currency.format(category.spent)}</span>
                 {category.editable ? <label className="budget-amount-field">
@@ -459,13 +473,14 @@ function FinanceOverviewView({
                   />
                   kr.
                 </label> : <span className="budget-amount-field">Kræver kategori</span>}
+                {category.editable ? <button aria-label={`Ny postering i ${category.name}`} className="category-posting-button" onClick={() => onAddTransactionForCategory(category.id)} type="button"><Plus size={14} />Postering</button> : null}
               </div>
             );
           })}
         </div>
       </Panel>
       <Panel>
-        <SectionTitle title="Seneste bevægelser" action="Ny postering" onAction={onAddTransaction} />
+        <SectionTitle title="Seneste bevægelser" action="Se alle" onAction={onOpenTransactions} />
         <div className="payment-list roomy">
           {finance.transactions.slice(0, 6).map((transaction) => (
             <button key={transaction.id} type="button" onClick={() => onEditTransaction(transaction)}>
@@ -477,7 +492,62 @@ function FinanceOverviewView({
           {finance.transactions.length === 0 ? <button className="finance-empty" type="button" onClick={onAddTransaction}><Plus size={16} /><span><strong>Tilføj første postering</strong><small>Indtægt eller udgift</small></span></button> : null}
         </div>
         <div className="panel-total"><span>Udgifter denne måned</span><strong>{currency.format(finance.spent)}</strong></div>
+        <button className="panel-primary-action" onClick={onAddTransaction} type="button"><Plus size={15} />Ny postering</button>
       </Panel>
+    </div>
+  );
+}
+
+function TransactionList({ transactions, onEdit }: { transactions: FinanceTransaction[]; onEdit: (transaction: FinanceTransaction) => void }) {
+  return (
+    <div className="payment-list transaction-history">
+      {transactions.map((transaction) => (
+        <button key={transaction.id} onClick={() => onEdit(transaction)} type="button">
+          <time>{transactionDateLabel(transaction.occurredOn)}</time>
+          <span><strong>{transaction.merchant}</strong><small>{transaction.categoryName} · {transactionRecurrenceLabel(transaction.recurrence)}{transaction.status === "scheduled" ? " · Planlagt" : ""}</small></span>
+          <b className={transaction.direction === "income" ? "amount-income" : ""}>{transaction.direction === "income" ? "+" : "−"}{currency.format(transaction.amount)}</b>
+        </button>
+      ))}
+      {transactions.length === 0 ? <div className="empty-state"><CircleDollarSign size={18} />Ingen posteringer matcher visningen</div> : null}
+    </div>
+  );
+}
+
+function TransactionsView({ transactions, categories, onAdd, onEdit }: { transactions: FinanceTransaction[]; categories: FinanceSnapshot["categories"]; onAdd: () => void; onEdit: (transaction: FinanceTransaction) => void }) {
+  const [query, setQuery] = useState("");
+  const [categoryId, setCategoryId] = useState("all");
+  const [status, setStatus] = useState<"all" | "approved" | "scheduled">("all");
+  const visible = transactions.filter((transaction) => {
+    const matchesQuery = `${transaction.merchant} ${transaction.categoryName}`.toLocaleLowerCase("da-DK").includes(query.trim().toLocaleLowerCase("da-DK"));
+    return matchesQuery && (categoryId === "all" || transaction.categoryId === categoryId) && (status === "all" || transaction.status === status);
+  });
+  return (
+    <div className="finance-page transactions-page">
+      <header className="compact-page-header"><div><h1>Posteringer</h1><p>Se, filtrér og ret registrerede og kommende betalinger.</p></div><button className="primary-button" onClick={onAdd} type="button"><Plus size={17} />Ny postering</button></header>
+      <Panel className="wide-panel">
+        <div className="transaction-filters">
+          <label><Search size={16} /><input aria-label="Søg i posteringer" onChange={(event) => setQuery(event.target.value)} placeholder="Søg efter navn eller kategori" value={query} /></label>
+          <select aria-label="Filtrér efter kategori" onChange={(event) => setCategoryId(event.target.value)} value={categoryId}><option value="all">Alle kategorier</option>{categories.filter((category) => category.editable).map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+          <select aria-label="Filtrér efter status" onChange={(event) => setStatus(event.target.value as typeof status)} value={status}><option value="all">Alle statusser</option><option value="approved">Bogført</option><option value="scheduled">Planlagt</option></select>
+        </div>
+        <TransactionList onEdit={onEdit} transactions={visible} />
+      </Panel>
+    </div>
+  );
+}
+
+function CategoryDetailView({ category, transactions, onBack, onAddTransaction, onEditTransaction, onPlannedChange }: { category: FinanceSnapshot["categories"][number]; transactions: FinanceTransaction[]; onBack: () => void; onAddTransaction: () => void; onEditTransaction: (transaction: FinanceTransaction) => void; onPlannedChange: (categoryId: string, planned: number) => void | Promise<void> }) {
+  const categoryTransactions = transactions.filter((transaction) => transaction.categoryId === category.id);
+  const actual = category.spent;
+  return (
+    <div className="finance-page category-detail-page">
+      <header className="compact-page-header"><div><button className="back-button" onClick={onBack} type="button"><ArrowLeft size={16} />Økonomi</button><h1><i className="category-color" style={{ background: category.color }} />{category.name}</h1><p>Budget, forbrug og alle posteringer for kategorien.</p></div><button className="primary-button" onClick={onAddTransaction} type="button"><Plus size={17} />Ny postering</button></header>
+      <section className="category-detail-summary">
+        <Panel><small>Månedsbudget</small><label className="category-budget-editor"><Pencil size={15} /><input aria-label={`Månedsbudget for ${category.name}`} defaultValue={category.planned} key={`${category.id}-${category.planned}`} min="0" onBlur={(event) => { const next = Number(event.target.value); if (isValidFinanceAmount(next) && next !== category.planned) void onPlannedChange(category.id, next); }} step="0.01" type="number" /><span>kr.</span></label></Panel>
+        <Panel><small>Bogført</small><strong>{currency.format(actual)}</strong><span>Denne måned</span></Panel>
+        <Panel><small>Tilbage</small><strong className={category.planned - actual < 0 ? "negative" : "positive"}>{currency.format(category.planned - actual)}</strong><span>Af månedsbudgettet</span></Panel>
+      </section>
+      <Panel className="wide-panel"><SectionTitle title="Posteringer i kategorien" action="Ny postering" onAction={onAddTransaction} /><TransactionList onEdit={onEditTransaction} transactions={categoryTransactions} /></Panel>
     </div>
   );
 }
@@ -498,6 +568,7 @@ function BudgetView({
   onYearChange,
   onAddTransaction,
   onAddCategory,
+  onOpenCategory,
   onPlannedChange,
   onIncomeChange,
   onExport,
@@ -509,6 +580,7 @@ function BudgetView({
   onYearChange: (year: number) => void;
   onAddTransaction: () => void;
   onAddCategory: (name: string, categoryType: Exclude<FinanceCategoryType, "uncategorized">) => Promise<boolean>;
+  onOpenCategory: (categoryId: string) => void;
   onPlannedChange: (categoryId: string, monthIndexes: number[], planned: number) => void | Promise<void>;
   onIncomeChange: (monthIndexes: number[], planned: number) => void | Promise<void>;
   onExport: () => void;
@@ -571,18 +643,20 @@ function BudgetView({
   return (
     <div className="finance-page">
       <header className="finance-workspace-header">
-        <div><h1>Budget</h1><p>Planlæg fra den periode, der passer jer, og sammenlign med de faktiske posteringer.</p></div>
-        <div className="budget-period-controls">
-          <label><CalendarDays size={18} /><span className="sr-only">Vælg periode</span><select aria-label="Vælg budgetperiode" onChange={(event) => onPeriodModeChange(event.target.value as BudgetPeriodMode)} value={periodMode}><option value="calendar">Kalenderår</option><option value="rest-of-year">Resten af året</option><option value="rolling-12">12 måneder frem</option></select></label>
-          {periodMode === "calendar" ? <label className="budget-year-select"><span className="sr-only">Vælg år</span><select aria-label="Vælg budgetår" onChange={(event) => onYearChange(Number(event.target.value))} value={selectedYear}>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label> : null}
-        </div>
-        <div className="budget-mode-switch" role="group" aria-label="Budgetvisning">
-          {(["budget", "actual", "difference"] as const).map((value) => <button className={mode === value ? "active" : ""} key={value} onClick={() => setMode(value)} type="button">{{ budget: "Budget", actual: "Faktisk", difference: "Forskel" }[value]}</button>)}
-        </div>
-        <div className="finance-header-actions">
-          <button className="secondary-button" onClick={onAddTransaction} type="button"><CircleDollarSign size={17} />Ny postering</button>
-          <button className="primary-button" onClick={() => setCategoryOpen(true)} type="button"><Plus size={17} />Tilføj kategori</button>
-          <button className="secondary-button" onClick={onExport} type="button"><Download size={17} />Eksportér PDF</button>
+        <div className="finance-workspace-copy"><h1>Budget</h1><p>Redigér direkte i tabellen · alle beløb gemmes automatisk.</p></div>
+        <div className="finance-workspace-tools">
+          <div className="budget-period-controls">
+            <label><CalendarDays size={17} /><span className="sr-only">Vælg periode</span><select aria-label="Vælg budgetperiode" onChange={(event) => onPeriodModeChange(event.target.value as BudgetPeriodMode)} value={periodMode}><option value="calendar">Kalenderår</option><option value="rest-of-year">Resten af året</option><option value="rolling-12">12 måneder frem</option></select></label>
+            {periodMode === "calendar" ? <label className="budget-year-select"><span className="sr-only">Vælg år</span><select aria-label="Vælg budgetår" onChange={(event) => onYearChange(Number(event.target.value))} value={selectedYear}>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label> : null}
+          </div>
+          <div className="budget-mode-switch" role="group" aria-label="Budgetvisning">
+            {(["budget", "actual", "difference"] as const).map((value) => <button aria-pressed={mode === value} className={mode === value ? "active" : ""} key={value} onClick={() => setMode(value)} type="button">{{ budget: "Budget", actual: "Faktisk", difference: "Forskel" }[value]}</button>)}
+          </div>
+          <div className="finance-header-actions">
+            <button className="secondary-button" onClick={onAddTransaction} type="button"><CircleDollarSign size={16} />Ny postering</button>
+            <button className="primary-button" onClick={() => setCategoryOpen(true)} type="button"><Plus size={16} />Kategori</button>
+            <button aria-label="Eksportér budget som PDF" className="secondary-button compact-icon-button" onClick={onExport} title="Eksportér PDF" type="button"><Download size={17} /><span>PDF</span></button>
+          </div>
         </div>
       </header>
 
@@ -603,7 +677,7 @@ function BudgetView({
               <tr className="budget-group-row expense"><th>Udgifter</th>{expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(expenseValues)))}</td></tr>
               {financePeriod.categories.map((category) => {
                 const values = categoryValues(category.planned, category.actual);
-                return <tr className="budget-entry-row" key={category.id}><th><span className="budget-row-marker" style={{ background: category.color }} />{category.name}</th>{values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{renderValue(value, `${category.name} ${financePeriod.months[monthIndex].label}`, category.editable ? { kind: "category", categoryId: category.id, monthIndex, monthLabel: financePeriod.months[monthIndex].label } : undefined)}</td>)}<td className={mode === "difference" ? sumValues(values) < 0 ? "negative" : "positive" : ""}>{budgetNumber.format(Math.round(sumValues(values)))}</td></tr>;
+                return <tr className="budget-entry-row" key={category.id}><th><button className="budget-category-link" onClick={() => onOpenCategory(category.id)} type="button"><span className="budget-row-marker" style={{ background: category.color }} />{category.name}<ChevronRight size={14} /></button></th>{values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{renderValue(value, `${category.name} ${financePeriod.months[monthIndex].label}`, category.editable ? { kind: "category", categoryId: category.id, monthIndex, monthLabel: financePeriod.months[monthIndex].label } : undefined)}</td>)}<td className={mode === "difference" ? sumValues(values) < 0 ? "negative" : "positive" : ""}>{budgetNumber.format(Math.round(sumValues(values)))}</td></tr>;
               })}
               <tr className="budget-total-row"><th>Udgifter i alt</th>{expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(expenseValues)))}</td></tr>
               <tr className="budget-available-row"><th>Til rådighed</th>{availableValues.map((value, monthIndex) => <td className={value < 0 ? "negative" : "positive"} key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td className={sumValues(availableValues) < 0 ? "negative" : "positive"}>{budgetNumber.format(Math.round(sumValues(availableValues)))}</td></tr>
@@ -819,12 +893,14 @@ function BudgetCategoryModal({
 function TransactionModal({
   categories,
   initial,
+  preferredCategoryId,
   onClose,
   onDelete,
   onSave,
 }: {
   categories: FinanceSnapshot["categories"];
   initial?: FinanceTransaction | null;
+  preferredCategoryId?: string | null;
   onClose: () => void;
   onDelete: (transactionId: string) => Promise<boolean>;
   onSave: (transaction: NewTransaction) => Promise<boolean>;
@@ -833,8 +909,10 @@ function TransactionModal({
   const [merchant, setMerchant] = useState(initial?.merchant ?? "");
   const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
   const [direction, setDirection] = useState<"expense" | "income">(initial?.direction ?? "expense");
-  const [categoryId, setCategoryId] = useState(initial?.categoryId ?? selectableCategories[0]?.id ?? "");
+  const [categoryId, setCategoryId] = useState(initial?.categoryId ?? preferredCategoryId ?? selectableCategories[0]?.id ?? "");
   const [occurredOn, setOccurredOn] = useState(initial?.occurredOn ?? new Date().toISOString().slice(0, 10));
+  const [recurrence, setRecurrence] = useState<TransactionRecurrence>(initial?.recurrence ?? "once");
+  const [transactionStatus, setTransactionStatus] = useState<"approved" | "scheduled">(initial?.status ?? "approved");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -849,7 +927,7 @@ function TransactionModal({
         }
         setBusy(true);
         setError(null);
-        const saved = await onSave({ merchant: merchant.trim(), amount: numericAmount, direction, occurredOn, categoryId: direction === "expense" ? categoryId || null : null });
+        const saved = await onSave({ merchant: merchant.trim(), amount: numericAmount, direction, occurredOn, categoryId: direction === "expense" ? categoryId || null : null, recurrence, status: initial ? transactionStatus : undefined });
         if (!saved) setError("Posteringen kunne ikke gemmes. Prøv igen.");
         setBusy(false);
       }} role="dialog">
@@ -865,6 +943,8 @@ function TransactionModal({
           <label>Beløb<input inputMode="decimal" min="0.01" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" required step="0.01" type="number" value={amount} /></label>
           <label>Dato<input onChange={(event) => setOccurredOn(event.target.value)} required type="date" value={occurredOn} /></label>
           {direction === "expense" ? <label className="wide">Kategori<select onChange={(event) => setCategoryId(event.target.value)} value={categoryId}><option value="">Ikke kategoriseret</option>{selectableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label> : null}
+          <label className="wide"><span className="field-label-with-icon"><Repeat2 size={15} />Gentagelse</span><select disabled={Boolean(initial?.recurrenceGroupId)} onChange={(event) => setRecurrence(event.target.value as TransactionRecurrence)} value={recurrence}><option value="once">Kun denne måned</option><option value="monthly">Hver måned</option><option value="every_2_months">Hver anden måned</option><option value="quarterly">Hvert kvartal</option><option value="half_yearly">Hvert halve år</option></select>{initial?.recurrenceGroupId ? <small>Gentagelsen er låst; denne forekomst kan stadig rettes.</small> : <small>Gentagelser oprettes 12 måneder frem.</small>}</label>
+          {initial ? <label className="wide">Status<select onChange={(event) => setTransactionStatus(event.target.value as typeof transactionStatus)} value={transactionStatus}><option value="approved">Bogført</option><option value="scheduled">Planlagt</option></select></label> : null}
         </div>
         {error ? <p className="modal-error" role="alert">{error}</p> : null}
         <div className="transaction-modal-actions">
@@ -952,9 +1032,27 @@ function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks:
   );
 }
 
+function readFinanceRoute(pathname: string): { section: FinanceSection; categoryId: string | null } | null {
+  const categoryMatch = pathname.match(/^\/oekonomi\/kategorier\/([^/]+)\/?$/);
+  if (categoryMatch) return { section: "category", categoryId: decodeURIComponent(categoryMatch[1]) };
+  if (/^\/oekonomi\/budget\/?$/.test(pathname)) return { section: "budget", categoryId: null };
+  if (/^\/oekonomi\/posteringer\/?$/.test(pathname)) return { section: "transactions", categoryId: null };
+  if (/^\/oekonomi\/?$/.test(pathname)) return { section: "overview", categoryId: null };
+  return null;
+}
+
+function financeRoute(section: FinanceSection, categoryId?: string | null) {
+  if (section === "category" && categoryId) return `/oekonomi/kategorier/${encodeURIComponent(categoryId)}`;
+  if (section === "budget") return "/oekonomi/budget";
+  if (section === "transactions") return "/oekonomi/posteringer";
+  return "/oekonomi";
+}
+
 export function HouseholdApp({ householdId, householdName = "Mit hjem", user, onSignOut }: HouseholdAppProps = {}) {
-  const [view, setView] = useState<View>("overview");
-  const [financeSection, setFinanceSection] = useState<FinanceSection>("overview");
+  const initialFinanceRoute = typeof window === "undefined" ? null : readFinanceRoute(window.location.pathname);
+  const [view, setView] = useState<View>(initialFinanceRoute ? "finance" : "overview");
+  const [financeSection, setFinanceSection] = useState<FinanceSection>(initialFinanceRoute?.section ?? "overview");
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(initialFinanceRoute?.categoryId ?? null);
   const [template, setTemplate] = useState<TemplateName>(productConfig.defaultTemplate);
   const [language, setLanguage] = useState("da");
   const [appearance, setAppearance] = useState<Appearance>("system");
@@ -984,6 +1082,9 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
   const [quickAdd, setQuickAdd] = useState<"task" | "shopping" | null>(null);
   const [transactionOpen, setTransactionOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<FinanceTransaction | null>(null);
+  const [transactionCategoryId, setTransactionCategoryId] = useState<string | null>(null);
+  const [financeTransactions, setFinanceTransactions] = useState<FinanceTransaction[]>(householdId ? [] : demoFinance.transactions);
+  const [categoryOpen, setCategoryOpen] = useState(false);
   const [documentUploadOpen, setDocumentUploadOpen] = useState(false);
   const [printTarget, setPrintTarget] = useState<"budget" | "meal" | null>(null);
   const userId = user?.id;
@@ -1024,6 +1125,23 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
   }, [appearance, budgetPeriodMode, language, preferencesReady, template]);
 
   useEffect(() => {
+    const handleHistory = () => {
+      const route = readFinanceRoute(window.location.pathname);
+      if (route) {
+        setView("finance");
+        setFinanceSection(route.section);
+        setSelectedCategoryId(route.categoryId);
+      } else {
+        setView("overview");
+        setFinanceSection("overview");
+        setSelectedCategoryId(null);
+      }
+    };
+    window.addEventListener("popstate", handleHistory);
+    return () => window.removeEventListener("popstate", handleHistory);
+  }, []);
+
+  useEffect(() => {
     if (!householdId) return;
     let active = true;
     const supabase = getSupabaseBrowserClient();
@@ -1032,8 +1150,9 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       supabase.from("shopping_items").select("id, title, quantity, completed_at").eq("household_id", householdId).order("created_at"),
       userId ? loadFinance(householdId, userId) : Promise.resolve(demoFinance),
       userId ? loadFinancePeriod(householdId, userId, budgetPeriodMode, budgetYear) : Promise.resolve(createDemoPeriodFinance(budgetPeriodMode, budgetYear)),
+      userId ? loadFinanceTransactions(householdId) : Promise.resolve(demoFinance.transactions),
       loadDocuments(householdId),
-    ]).then(([taskResult, shoppingResult, financeResult, financePeriodResult, documentsResult]) => {
+    ]).then(([taskResult, shoppingResult, financeResult, financePeriodResult, transactionsResult, documentsResult]) => {
       if (!active) return;
       if (taskResult.error || shoppingResult.error) {
         setSyncState("error");
@@ -1053,6 +1172,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       })));
       setFinance(financeResult);
       setFinancePeriod(financePeriodResult);
+      setFinanceTransactions(transactionsResult);
       setHouseholdDocuments(documentsResult);
       setSyncState("synced");
     }).catch(() => { if (active) setSyncState("error"); });
@@ -1060,6 +1180,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
   }, [budgetPeriodMode, budgetYear, householdId, userId]);
 
   const title = useMemo(() => visibleNavItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view, visibleNavItems]);
+  const selectedCategory = finance.categories.find((category) => category.id === selectedCategoryId) ?? null;
   const displayName = user?.displayName || "Anders";
   const firstName = displayName.split(/\s+/)[0] || displayName;
   const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "MH";
@@ -1086,9 +1207,23 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       setSyncState("error");
     } else setSyncState("synced");
   };
+  const navigateFinance = (section: FinanceSection, categoryId: string | null = null) => {
+    setView("finance");
+    setFinanceSection(section);
+    setSelectedCategoryId(categoryId);
+    window.history.pushState(null, "", financeRoute(section, categoryId));
+    setMobileMenu(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const navigate = (next: View) => {
+    if (next === "finance") {
+      navigateFinance("overview");
+      return;
+    }
     setView(next);
-    if (next === "finance") setFinanceSection("overview");
+    setFinanceSection("overview");
+    setSelectedCategoryId(null);
+    window.history.pushState(null, "", "/");
     setMobileMenu(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -1113,16 +1248,18 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
     setSyncState("synced");
     setQuickAdd(null);
   };
-  const openNewTransaction = () => { setEditingTransaction(null); setTransactionOpen(true); };
-  const openTransaction = (transaction: FinanceTransaction) => { setEditingTransaction(transaction); setTransactionOpen(true); };
+  const openNewTransaction = (categoryId: string | null = null) => { setEditingTransaction(null); setTransactionCategoryId(categoryId); setTransactionOpen(true); };
+  const openTransaction = (transaction: FinanceTransaction) => { setEditingTransaction(transaction); setTransactionCategoryId(transaction.categoryId); setTransactionOpen(true); };
   const refreshFinance = async () => {
     if (!householdId || !user) return;
-    const [nextFinance, nextFinancePeriod] = await Promise.all([
+    const [nextFinance, nextFinancePeriod, nextTransactions] = await Promise.all([
       loadFinance(householdId, user.id),
       loadFinancePeriod(householdId, user.id, budgetPeriodMode, budgetYear),
+      loadFinanceTransactions(householdId),
     ]);
     setFinance(nextFinance);
     setFinancePeriod(nextFinancePeriod);
+    setFinanceTransactions(nextTransactions);
   };
   const saveTransaction = async (transaction: NewTransaction) => {
     if (!householdId || !user) return false;
@@ -1133,6 +1270,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       await refreshFinance();
       setTransactionOpen(false);
       setEditingTransaction(null);
+      setTransactionCategoryId(null);
       setSyncState("synced");
       return true;
     } catch {
@@ -1148,6 +1286,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       await refreshFinance();
       setTransactionOpen(false);
       setEditingTransaction(null);
+      setTransactionCategoryId(null);
       setSyncState("synced");
       return true;
     } catch {
@@ -1214,7 +1353,9 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
   };
   const saveFinanceCategory = async (name: string, categoryType: Exclude<FinanceCategoryType, "uncategorized">) => {
     if (!householdId || !user) {
-      setFinancePeriod((snapshot) => ({ ...snapshot, categories: [...snapshot.categories, { id: `demo-${Date.now()}`, name, color: "#4A7A91", categoryType, editable: true, budgetItemIds: Array(snapshot.months.length).fill(null), planned: Array(snapshot.months.length).fill(0), actual: Array(snapshot.months.length).fill(0) }] }));
+      const categoryId = `demo-${Date.now()}`;
+      setFinance((snapshot) => ({ ...snapshot, categories: [...snapshot.categories, { id: categoryId, budgetItemId: `${categoryId}-item`, name, color: "#4A7A91", categoryType, editable: true, planned: 0, spent: 0 }] }));
+      setFinancePeriod((snapshot) => ({ ...snapshot, categories: [...snapshot.categories, { id: categoryId, name, color: "#4A7A91", categoryType, editable: true, budgetItemIds: Array(snapshot.months.length).fill(null), planned: Array(snapshot.months.length).fill(0), actual: Array(snapshot.months.length).fill(0) }] }));
       return true;
     }
     setSyncState("saving");
@@ -1311,11 +1452,15 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
           {view === "finance" ? (
             <div className="finance-area">
               <div className="finance-tabs" role="tablist" aria-label="Økonomi">
-                <button aria-selected={financeSection === "overview"} className={financeSection === "overview" ? "active" : ""} onClick={() => setFinanceSection("overview")} role="tab" type="button">Overblik</button>
-                <button aria-selected={financeSection === "budget"} className={financeSection === "budget" ? "active" : ""} onClick={() => setFinanceSection("budget")} role="tab" type="button">Budget</button>
+                <button aria-selected={financeSection === "overview"} className={financeSection === "overview" ? "active" : ""} onClick={() => navigateFinance("overview")} role="tab" type="button">Overblik</button>
+                <button aria-selected={financeSection === "budget"} className={financeSection === "budget" ? "active" : ""} onClick={() => navigateFinance("budget")} role="tab" type="button">Budget</button>
+                <button aria-selected={financeSection === "transactions"} className={financeSection === "transactions" ? "active" : ""} onClick={() => navigateFinance("transactions")} role="tab" type="button">Posteringer</button>
               </div>
-              {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddTransaction={openNewTransaction} onEditTransaction={openTransaction} onOpenBudget={() => setFinanceSection("budget")} onPlannedChange={savePlannedAmount} /> : null}
-              {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={saveFinanceCategory} onAddTransaction={openNewTransaction} onExport={() => exportPdf("budget")} onIncomeChange={savePeriodIncome} onPeriodModeChange={setBudgetPeriodMode} onPlannedChange={savePeriodPlannedAmounts} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
+              {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} onPlannedChange={savePlannedAmount} /> : null}
+              {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={saveFinanceCategory} onAddTransaction={() => openNewTransaction()} onExport={() => exportPdf("budget")} onIncomeChange={savePeriodIncome} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onPeriodModeChange={setBudgetPeriodMode} onPlannedChange={savePeriodPlannedAmounts} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
+              {financeSection === "transactions" ? <TransactionsView categories={finance.categories} onAdd={() => openNewTransaction()} onEdit={openTransaction} transactions={financeTransactions} /> : null}
+              {financeSection === "category" && selectedCategory ? <CategoryDetailView category={selectedCategory} onAddTransaction={() => openNewTransaction(selectedCategory.id)} onBack={() => navigateFinance("overview")} onEditTransaction={openTransaction} onPlannedChange={savePlannedAmount} transactions={financeTransactions} /> : null}
+              {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
             </div>
           ) : null}
           {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} member={user ? { name: user.displayName, email: user.email } : undefined} /> : null}
@@ -1329,7 +1474,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       </nav>
 
       {quickAdd ? <QuickAdd kind={quickAdd} onClose={() => setQuickAdd(null)} onAdd={addItem} /> : null}
-      {transactionOpen ? <TransactionModal categories={finance.categories} initial={editingTransaction} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); }} onDelete={removeTransaction} onSave={saveTransaction} /> : null}
+      {transactionOpen ? <TransactionModal categories={finance.categories} initial={editingTransaction} preferredCategoryId={transactionCategoryId} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); }} onDelete={removeTransaction} onSave={saveTransaction} /> : null}
+      {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = await saveFinanceCategory(name, categoryType); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
       <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} />
     </div>
