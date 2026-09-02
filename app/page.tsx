@@ -8,6 +8,7 @@ export default function Home() {
   return (
     <AuthGate
       appUrl={runtimeEnv.NEXT_PUBLIC_APP_URL?.trim() || null}
+      initialPath="/"
       supabaseConfig={url && publishableKey ? { url, publishableKey } : null}
     />
   );

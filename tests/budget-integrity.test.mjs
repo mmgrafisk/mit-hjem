@@ -6,6 +6,7 @@ const migrationPath = new URL("../supabase/migrations/20260831180118_improve_bud
 const financePath = new URL("../app/finance-data.ts", import.meta.url);
 const appPath = new URL("../app/household-app.tsx", import.meta.url);
 const recurringMigrationPath = new URL("../supabase/migrations/20260901133016_add_recurring_finance_transactions.sql", import.meta.url);
+const recurringSeriesMigrationPath = new URL("../supabase/migrations/20260902052000_store_recurring_transactions_as_series.sql", import.meta.url);
 
 test("budget mutations use restricted transactional database functions", async () => {
   const [migration, finance] = await Promise.all([readFile(migrationPath, "utf8"), readFile(financePath, "utf8")]);
@@ -45,6 +46,20 @@ test("recurring transactions remain household-scoped and distinguish scheduled o
   assert.match(app, /Hver anden måned/);
   assert.match(app, /Hvert kvartal/);
   assert.match(app, /Hvert halve år/);
+});
+
+test("recurring transactions are stored once, have an optional end date and are expanded for budget calculations", async () => {
+  const [migration, finance, app] = await Promise.all([readFile(recurringSeriesMigrationPath, "utf8"), readFile(financePath, "utf8"), readFile(appPath, "utf8")]);
+  assert.match(migration, /recurrence_end_on date/);
+  assert.match(migration, /delete from public\.transactions/);
+  assert.match(finance, /\.insert\(\{/);
+  assert.doesNotMatch(finance, /\.insert\(dates\.map/);
+  assert.match(finance, /collapseRecurringTransactions/);
+  assert.match(finance, /recurringTransactionDates\(transaction\.occurredOn/);
+  assert.match(finance, /\.in\("status", \["approved", "scheduled"\]\)/);
+  assert.match(app, /Sidste betaling/);
+  assert.match(app, /Betalingsplan/);
+  assert.match(app, /Slet .* fra oversigten/);
 });
 
 test("finance categories and transaction history have stable routes", async () => {

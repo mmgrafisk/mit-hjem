@@ -5,6 +5,7 @@ import {
   budgetEditMonthIndexes,
   budgetPeriodMonthKeys,
   budgetPeriodTotalLabel,
+  collapseRecurringTransactions,
   isValidFinanceAmount,
   maximumFinanceAmount,
   recurringTransactionDates,
@@ -71,13 +72,47 @@ test("accepts ørebeløb but rejects negative and oversized finance values", () 
   assert.equal(isValidFinanceAmount(maximumFinanceAmount + 0.01), false);
 });
 
-test("builds recurring transaction dates through the next 12 months", () => {
-  assert.deepEqual(recurringTransactionDates("2026-01-31", "monthly"), [
+test("builds recurring transaction dates for a bounded view", () => {
+  assert.deepEqual(recurringTransactionDates("2026-01-31", "monthly", { throughDate: "2026-12-31" }), [
     "2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31", "2026-06-30",
     "2026-07-31", "2026-08-31", "2026-09-30", "2026-10-31", "2026-11-30", "2026-12-31",
   ]);
-  assert.deepEqual(recurringTransactionDates("2026-08-15", "quarterly"), ["2026-08-15", "2026-11-15", "2027-02-15", "2027-05-15"]);
-  assert.deepEqual(recurringTransactionDates("2026-08-15", "half_yearly"), ["2026-08-15", "2027-02-15"]);
+  assert.deepEqual(recurringTransactionDates("2026-08-15", "quarterly", { throughDate: "2027-08-14" }), ["2026-08-15", "2026-11-15", "2027-02-15", "2027-05-15"]);
+  assert.deepEqual(recurringTransactionDates("2026-08-15", "half_yearly", { throughDate: "2027-08-14" }), ["2026-08-15", "2027-02-15"]);
   assert.deepEqual(recurringTransactionDates("2026-08-15", "once"), ["2026-08-15"]);
   assert.equal(transactionRecurrenceLabel("every_2_months"), "Hver anden måned");
+});
+
+test("monthly recurrence stays ongoing unless a final payment date is set", () => {
+  assert.deepEqual(
+    recurringTransactionDates("2026-09-02", "monthly", { fromDate: "2027-01-01", throughDate: "2027-04-30" }),
+    ["2027-01-02", "2027-02-02", "2027-03-02", "2027-04-02"],
+  );
+  assert.deepEqual(
+    recurringTransactionDates("2026-09-02", "monthly", { endDate: "2027-02-02", throughDate: "2027-04-30" }),
+    ["2026-09-02", "2026-10-02", "2026-11-02", "2026-12-02", "2027-01-02", "2027-02-02"],
+  );
+});
+
+test("collapses legacy monthly rows to one series in the overview", () => {
+  const base = {
+    merchant: "Husleje",
+    amount: 6_200,
+    direction: "expense" as const,
+    categoryId: "bolig",
+    categoryName: "Bolig",
+    status: "approved" as const,
+    recurrence: "monthly" as const,
+    recurrenceGroupId: "series-1",
+    recurrenceEndOn: null,
+    linkedDocumentIds: [],
+  };
+  const collapsed = collapseRecurringTransactions([
+    { ...base, id: "feb", occurredOn: "2027-02-02", status: "scheduled" },
+    { ...base, id: "jan", occurredOn: "2027-01-02", status: "scheduled" },
+    { ...base, id: "sep", occurredOn: "2026-09-02" },
+  ]);
+  assert.equal(collapsed.length, 1);
+  assert.equal(collapsed[0].id, "sep");
+  assert.equal(collapsed[0].occurredOn, "2026-09-02");
 });

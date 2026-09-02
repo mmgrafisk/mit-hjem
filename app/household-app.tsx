@@ -11,6 +11,7 @@ import {
   CircleDollarSign,
   Download,
   FileText,
+  ExternalLink,
   Globe2,
   House,
   LayoutDashboard,
@@ -28,6 +29,8 @@ import {
   Sun,
   Trash2,
   Repeat2,
+  Link2,
+  KeyRound,
   Upload,
   Users,
   UtensilsCrossed,
@@ -67,6 +70,7 @@ import {
   loadFinance,
   loadFinancePeriod,
   loadFinanceTransactions,
+  recurringTransactionDates,
   shouldPromptForBudgetEdit,
   transactionDateLabel,
   transactionRecurrenceLabel,
@@ -82,6 +86,16 @@ import {
   type NewTransaction,
   type TransactionRecurrence,
 } from "./finance-data";
+import {
+  addSubscription,
+  deleteSubscription,
+  loadSubscriptions,
+  subscriptionIntervalLabel,
+  updateSubscription,
+  type NewSubscription,
+  type Subscription,
+  type SubscriptionStatus,
+} from "./subscriptions-data";
 import {
   productConfig,
   supportedLanguages,
@@ -103,11 +117,12 @@ type View =
 type Appearance = "light" | "dark" | "system";
 type ResolvedAppearance = Exclude<Appearance, "system">;
 type SyncState = "loading" | "synced" | "saving" | "error";
-type FinanceSection = "overview" | "budget" | "transactions" | "category";
+type FinanceSection = "overview" | "budget" | "transactions" | "subscriptions" | "category";
 
 type HouseholdAppProps = {
   householdId?: string;
   householdName?: string;
+  initialPath?: string;
   user?: { id: string; email: string; displayName: string };
   onSignOut?: () => void | Promise<void>;
 };
@@ -145,9 +160,9 @@ const demoFinance: FinanceSnapshot = {
     { id: "demo-leisure", budgetItemId: "demo-leisure-item", name: "Fritid", color: "#D85B8C", categoryType: "variable_expense", editable: true, planned: 2000, spent: 0 },
   ],
   transactions: [
-    { id: "demo-1", merchant: "Norlys", amount: 499, direction: "expense", occurredOn: "2025-05-23", categoryId: "demo-home", categoryName: "Bolig", status: "approved", recurrence: "monthly", recurrenceGroupId: "demo-series-1" },
-    { id: "demo-2", merchant: "Rema 1000", amount: 236.75, direction: "expense", occurredOn: "2025-05-19", categoryId: "demo-food", categoryName: "Mad & husholdning", status: "approved", recurrence: "once", recurrenceGroupId: null },
-    { id: "demo-3", merchant: "Løn", amount: 32000, direction: "income", occurredOn: "2025-05-01", categoryId: null, categoryName: "Indtægt", status: "approved", recurrence: "monthly", recurrenceGroupId: "demo-series-2" },
+    { id: "demo-1", merchant: "Norlys", amount: 499, direction: "expense", occurredOn: "2025-05-23", categoryId: "demo-home", categoryName: "Bolig", status: "approved", recurrence: "monthly", recurrenceGroupId: "demo-series-1", recurrenceEndOn: null, linkedDocumentIds: ["demo-doc-1"] },
+    { id: "demo-2", merchant: "Rema 1000", amount: 236.75, direction: "expense", occurredOn: "2025-05-19", categoryId: "demo-food", categoryName: "Mad & husholdning", status: "approved", recurrence: "once", recurrenceGroupId: null, recurrenceEndOn: null, linkedDocumentIds: ["demo-doc-2"] },
+    { id: "demo-3", merchant: "Løn", amount: 32000, direction: "income", occurredOn: "2025-05-01", categoryId: null, categoryName: "Indtægt", status: "approved", recurrence: "monthly", recurrenceGroupId: "demo-series-2", recurrenceEndOn: null, linkedDocumentIds: [] },
   ],
 };
 
@@ -156,6 +171,10 @@ const demoDocuments: HouseholdDocument[] = [
   { id: "demo-doc-2", title: "Kvittering · Rema 1000", kind: "receipt", visibility: "household", mimeType: "image/jpeg", sizeBytes: 640000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-19T12:00:00Z" },
   { id: "demo-doc-3", title: "Forsikring · Police", kind: "insurance", visibility: "household", mimeType: "application/pdf", sizeBytes: 1240000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-11T09:00:00Z" },
   { id: "demo-doc-4", title: "Lønseddel · Anders", kind: "payslip", visibility: "private", mimeType: "application/pdf", sizeBytes: 242000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-01T08:00:00Z" },
+];
+
+const demoSubscriptions: Subscription[] = [
+  { id: "demo-sub-1", name: "Norlys", websiteUrl: "https://norlys.dk", accountIdentifier: "anders@example.dk", passwordManagerUrl: null, amount: 499, billingIntervalMonths: 1, trialEndsOn: null, cancellationDeadlineOn: null, nextPaymentOn: "2025-06-23", status: "active", linkedTransactionId: "demo-1", linkedDocumentIds: ["demo-doc-1"] },
 ];
 
 function createDemoPeriodFinance(mode: BudgetPeriodMode, selectedYear: number): FinancePeriodSnapshot {
@@ -498,22 +517,25 @@ function FinanceOverviewView({
   );
 }
 
-function TransactionList({ transactions, onEdit }: { transactions: FinanceTransaction[]; onEdit: (transaction: FinanceTransaction) => void }) {
+function TransactionList({ transactions, onEdit, onDelete }: { transactions: FinanceTransaction[]; onEdit: (transaction: FinanceTransaction) => void; onDelete?: (transaction: FinanceTransaction) => Promise<boolean> }) {
   return (
     <div className="payment-list transaction-history">
       {transactions.map((transaction) => (
-        <button key={transaction.id} onClick={() => onEdit(transaction)} type="button">
-          <time>{transactionDateLabel(transaction.occurredOn)}</time>
-          <span><strong>{transaction.merchant}</strong><small>{transaction.categoryName} · {transactionRecurrenceLabel(transaction.recurrence)}{transaction.status === "scheduled" ? " · Planlagt" : ""}</small></span>
-          <b className={transaction.direction === "income" ? "amount-income" : ""}>{transaction.direction === "income" ? "+" : "−"}{currency.format(transaction.amount)}</b>
-        </button>
+        <div className="transaction-history-row" key={transaction.id}>
+          <button className="transaction-open-button" onClick={() => onEdit(transaction)} type="button">
+            <time>{transactionDateLabel(transaction.occurredOn)}</time>
+            <span><strong>{transaction.merchant}</strong><small>{transaction.categoryName} · {transactionRecurrenceLabel(transaction.recurrence)}{transaction.recurrenceEndOn ? ` · til ${transactionDateLabel(transaction.recurrenceEndOn)}` : transaction.recurrence !== "once" ? " · løbende" : ""}{transaction.status === "scheduled" ? " · Planlagt" : ""}{transaction.linkedDocumentIds.length ? ` · ${transaction.linkedDocumentIds.length} dokument${transaction.linkedDocumentIds.length === 1 ? "" : "er"}` : ""}</small></span>
+            <b className={transaction.direction === "income" ? "amount-income" : ""}>{transaction.direction === "income" ? "+" : "−"}{currency.format(transaction.amount)}</b>
+          </button>
+          {onDelete ? <button aria-label={`Slet ${transaction.merchant} fra oversigten`} className="transaction-delete-button" onClick={async () => { if (window.confirm(`Slet posteringen “${transaction.merchant}”${transaction.recurrence !== "once" ? " og hele betalingsserien" : ""}?`)) await onDelete(transaction); }} title="Slet postering" type="button"><Trash2 size={16} /></button> : null}
+        </div>
       ))}
       {transactions.length === 0 ? <div className="empty-state"><CircleDollarSign size={18} />Ingen posteringer matcher visningen</div> : null}
     </div>
   );
 }
 
-function TransactionsView({ transactions, categories, onAdd, onEdit }: { transactions: FinanceTransaction[]; categories: FinanceSnapshot["categories"]; onAdd: () => void; onEdit: (transaction: FinanceTransaction) => void }) {
+function TransactionsView({ transactions, categories, onAdd, onEdit, onDelete }: { transactions: FinanceTransaction[]; categories: FinanceSnapshot["categories"]; onAdd: () => void; onEdit: (transaction: FinanceTransaction) => void; onDelete: (transaction: FinanceTransaction) => Promise<boolean> }) {
   const [query, setQuery] = useState("");
   const [categoryId, setCategoryId] = useState("all");
   const [status, setStatus] = useState<"all" | "approved" | "scheduled">("all");
@@ -523,14 +545,14 @@ function TransactionsView({ transactions, categories, onAdd, onEdit }: { transac
   });
   return (
     <div className="finance-page transactions-page">
-      <header className="compact-page-header"><div><h1>Posteringer</h1><p>Se, filtrér og ret registrerede og kommende betalinger.</p></div><button className="primary-button" onClick={onAdd} type="button"><Plus size={17} />Ny postering</button></header>
+      <header className="compact-page-header"><div><p>Se, filtrér og ret registrerede og kommende betalinger.</p></div><button className="primary-button" onClick={onAdd} type="button"><Plus size={17} />Ny postering</button></header>
       <Panel className="wide-panel">
         <div className="transaction-filters">
           <label><Search size={16} /><input aria-label="Søg i posteringer" onChange={(event) => setQuery(event.target.value)} placeholder="Søg efter navn eller kategori" value={query} /></label>
           <select aria-label="Filtrér efter kategori" onChange={(event) => setCategoryId(event.target.value)} value={categoryId}><option value="all">Alle kategorier</option>{categories.filter((category) => category.editable).map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
           <select aria-label="Filtrér efter status" onChange={(event) => setStatus(event.target.value as typeof status)} value={status}><option value="all">Alle statusser</option><option value="approved">Bogført</option><option value="scheduled">Planlagt</option></select>
         </div>
-        <TransactionList onEdit={onEdit} transactions={visible} />
+        <TransactionList onDelete={onDelete} onEdit={onEdit} transactions={visible} />
       </Panel>
     </div>
   );
@@ -541,7 +563,7 @@ function CategoryDetailView({ category, transactions, onBack, onAddTransaction, 
   const actual = category.spent;
   return (
     <div className="finance-page category-detail-page">
-      <header className="compact-page-header"><div><button className="back-button" onClick={onBack} type="button"><ArrowLeft size={16} />Økonomi</button><h1><i className="category-color" style={{ background: category.color }} />{category.name}</h1><p>Budget, forbrug og alle posteringer for kategorien.</p></div><button className="primary-button" onClick={onAddTransaction} type="button"><Plus size={17} />Ny postering</button></header>
+      <header className="compact-page-header"><div><button className="back-button" onClick={onBack} type="button"><ArrowLeft size={16} />Økonomi</button><p>Budget, forbrug og alle posteringer for kategorien.</p></div><button className="primary-button" onClick={onAddTransaction} type="button"><Plus size={17} />Ny postering</button></header>
       <section className="category-detail-summary">
         <Panel><small>Månedsbudget</small><label className="category-budget-editor"><Pencil size={15} /><input aria-label={`Månedsbudget for ${category.name}`} defaultValue={category.planned} key={`${category.id}-${category.planned}`} min="0" onBlur={(event) => { const next = Number(event.target.value); if (isValidFinanceAmount(next) && next !== category.planned) void onPlannedChange(category.id, next); }} step="0.01" type="number" /><span>kr.</span></label></Panel>
         <Panel><small>Bogført</small><strong>{currency.format(actual)}</strong><span>Denne måned</span></Panel>
@@ -643,7 +665,7 @@ function BudgetView({
   return (
     <div className="finance-page">
       <header className="finance-workspace-header">
-        <div className="finance-workspace-copy"><h1>Budget</h1><p>Redigér direkte i tabellen · alle beløb gemmes automatisk.</p></div>
+        <div className="finance-workspace-copy"><p>Redigér direkte i tabellen · alle beløb gemmes automatisk.</p></div>
         <div className="finance-workspace-tools">
           <div className="budget-period-controls">
             <label><CalendarDays size={17} /><span className="sr-only">Vælg periode</span><select aria-label="Vælg budgetperiode" onChange={(event) => onPeriodModeChange(event.target.value as BudgetPeriodMode)} value={periodMode}><option value="calendar">Kalenderår</option><option value="rest-of-year">Resten af året</option><option value="rolling-12">12 måneder frem</option></select></label>
@@ -714,6 +736,7 @@ function CollectionView({
   toggleShopping,
   openUpload,
   openDocument,
+  openAdd,
   member,
 }: {
   view: Exclude<View, "overview" | "finance" | "settings">;
@@ -724,6 +747,7 @@ function CollectionView({
   toggleShopping: (id: ChecklistItem["id"]) => void;
   openUpload: () => void;
   openDocument: (document: HouseholdDocument) => void | Promise<void>;
+  openAdd: (kind: "task" | "shopping") => void;
   member?: { name: string; email: string };
 }) {
   const [documentQuery, setDocumentQuery] = useState("");
@@ -735,14 +759,14 @@ function CollectionView({
     meals: ["Madplan", "Planlæg ugen, justér portioner og gør indkøbet enkelt."],
     household: ["Husstanden", "Medlemmer, roller og adgang til fælles eller private områder."],
   };
-  const [title, intro] = labels[view];
+  const [, intro] = labels[view];
   const visibleDocuments = documents.filter((document) => `${document.title} ${documentKindLabel(document.kind)}`.toLocaleLowerCase("da-DK").includes(documentQuery.trim().toLocaleLowerCase("da-DK")));
 
   return (
     <div className="collection-page">
-      <div className="module-intro"><h1>{title}</h1><p>{intro}</p></div>
+      <div className="module-intro"><p>{intro}</p></div>
       {view === "documents" ? (
-        <Panel className="wide-panel">
+        <Panel className="wide-panel collection-main">
           <div className="toolbar"><label><Search size={16} /><input aria-label="Søg i dokumenter" onChange={(event) => setDocumentQuery(event.target.value)} placeholder="Søg i dokumenter" value={documentQuery} /></label><button onClick={openUpload} type="button"><Upload size={15} /> Upload</button></div>
           <div className="document-list large">
             {visibleDocuments.map((document, index) => <button key={document.id} onClick={() => void openDocument(document)} type="button"><span className={`file-icon file-${(index % 4) + 1}`}><FileText size={18} /></span><span><strong>{document.title}</strong><small>{documentMeta(document)}</small></span><b>{document.visibility === "private" ? "Privat" : "Husstanden"}</b><ChevronRight size={16} /></button>)}
@@ -750,15 +774,21 @@ function CollectionView({
           </div>
         </Panel>
       ) : null}
-      {view === "tasks" ? <Panel className="wide-panel"><div className="check-list large">{tasks.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleTask} />)}{tasks.length === 0 ? <div className="empty-state"><CheckSquare size={18} />Ingen opgaver endnu</div> : null}</div></Panel> : null}
-      {view === "shopping" ? <Panel className="wide-panel"><div className="check-list large">{shopping.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleShopping} />)}{shopping.length === 0 ? <div className="empty-state"><ShoppingCart size={18} />Indkøbslisten er tom</div> : null}</div></Panel> : null}
-      {view === "calendar" ? <Panel className="wide-panel"><div className="calendar-list large">{calendarItems.map(([day, time, item, tone]) => <button type="button" key={`${day}-${time}`}><span className={`timeline-dot dot-${tone}`} /><time>{day}</time><b>{time}</b><span>{item}</span></button>)}</div></Panel> : null}
-      {view === "meals" ? <Panel className="wide-panel"><div className="meal-strip large">{meals.map(([day, meal, duration], index) => <button type="button" key={day}><small>{day}</small><span className={`meal-visual meal-${index + 1}`} /><strong>{meal}</strong><em>{duration}</em></button>)}</div></Panel> : null}
+      {view === "tasks" ? <Panel className="wide-panel collection-main"><div className="check-list large">{tasks.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleTask} />)}{tasks.length === 0 ? <div className="empty-state"><CheckSquare size={18} />Ingen opgaver endnu</div> : null}</div></Panel> : null}
+      {view === "shopping" ? <Panel className="wide-panel collection-main"><div className="check-list large">{shopping.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleShopping} />)}{shopping.length === 0 ? <div className="empty-state"><ShoppingCart size={18} />Indkøbslisten er tom</div> : null}</div></Panel> : null}
+      {view === "calendar" ? <Panel className="wide-panel collection-main"><div className="calendar-list large">{calendarItems.map(([day, time, item, tone]) => <button type="button" key={`${day}-${time}`}><span className={`timeline-dot dot-${tone}`} /><time>{day}</time><b>{time}</b><span>{item}</span></button>)}</div></Panel> : null}
+      {view === "meals" ? <Panel className="wide-panel collection-main"><div className="meal-strip large">{meals.map(([day, meal, duration], index) => <button type="button" key={day}><small>{day}</small><span className={`meal-visual meal-${index + 1}`} /><strong>{meal}</strong><em>{duration}</em></button>)}</div></Panel> : null}
       {view === "household" ? (
-        <div className="member-grid">
+        <div className="member-grid collection-main">
           {member ? <Panel><span className="member-avatar">{member.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><h2>{member.name}</h2><p>{member.email} · Ejer</p></Panel> : <div className="empty-state"><Users size={18} />Ingen medlemmer at vise</div>}
         </div>
       ) : null}
+      <aside className="collection-aside">
+        <Panel><small>Overblik</small><strong className="aside-value">{view === "documents" ? documents.length : view === "tasks" ? tasks.filter((item) => !item.done).length : view === "shopping" ? shopping.filter((item) => !item.done).length : view === "calendar" ? calendarItems.length : view === "meals" ? meals.length : member ? 1 : 0}</strong><p>{view === "documents" ? "dokumenter i arkivet" : view === "tasks" ? "åbne opgaver" : view === "shopping" ? "varer mangler" : view === "calendar" ? "aftaler i visningen" : view === "meals" ? "dage planlagt" : "aktivt medlem"}</p></Panel>
+        {view === "documents" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={openUpload} type="button"><Upload size={15} />Upload dokument</button><p className="aside-empty">Dokumenter kan nu forbindes med posteringer og abonnementer.</p></Panel> : null}
+        {view === "tasks" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={() => openAdd("task")} type="button"><Plus size={15} />Ny opgave</button></Panel> : null}
+        {view === "shopping" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={() => openAdd("shopping")} type="button"><Plus size={15} />Tilføj vare</button></Panel> : null}
+      </aside>
     </div>
   );
 }
@@ -780,7 +810,7 @@ function SettingsView({
 }) {
   return (
     <div className="settings-page">
-      <div className="module-intro"><h1>Indstillinger</h1><p>Tilpas oplevelsen uden at ændre appens funktioner.</p></div>
+      <div className="module-intro"><p>Tilpas oplevelsen uden at ændre appens funktioner.</p></div>
       <Panel>
         <div className="settings-heading"><Palette size={20} /><span><h2>Design-template</h2><p>Farver, overflader og typografi styres centralt.</p></span></div>
         <div className="template-grid">
@@ -892,17 +922,21 @@ function BudgetCategoryModal({
 
 function TransactionModal({
   categories,
+  documents,
   initial,
   preferredCategoryId,
   onClose,
   onDelete,
+  onOpenDocument,
   onSave,
 }: {
   categories: FinanceSnapshot["categories"];
+  documents: HouseholdDocument[];
   initial?: FinanceTransaction | null;
   preferredCategoryId?: string | null;
   onClose: () => void;
   onDelete: (transactionId: string) => Promise<boolean>;
+  onOpenDocument: (document: HouseholdDocument) => void | Promise<void>;
   onSave: (transaction: NewTransaction) => Promise<boolean>;
 }) {
   const selectableCategories = categories.filter((category) => category.editable);
@@ -912,9 +946,19 @@ function TransactionModal({
   const [categoryId, setCategoryId] = useState(initial?.categoryId ?? preferredCategoryId ?? selectableCategories[0]?.id ?? "");
   const [occurredOn, setOccurredOn] = useState(initial?.occurredOn ?? new Date().toISOString().slice(0, 10));
   const [recurrence, setRecurrence] = useState<TransactionRecurrence>(initial?.recurrence ?? "once");
+  const [recurrenceEndOn, setRecurrenceEndOn] = useState(initial?.recurrenceEndOn ?? "");
   const [transactionStatus, setTransactionStatus] = useState<"approved" | "scheduled">(initial?.status ?? "approved");
+  const [linkedDocumentIds, setLinkedDocumentIds] = useState<string[]>(initial?.linkedDocumentIds ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previewThrough = (() => {
+    if (recurrenceEndOn) return recurrenceEndOn;
+    const date = new Date(`${occurredOn}T12:00:00`);
+    if (Number.isNaN(date.getTime())) return occurredOn;
+    date.setMonth(date.getMonth() + 23);
+    return date.toISOString().slice(0, 10);
+  })();
+  const occurrenceDates = recurrence === "once" ? [] : recurringTransactionDates(occurredOn, recurrence, { endDate: recurrenceEndOn || null, throughDate: previewThrough, limit: 24 });
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -925,9 +969,13 @@ function TransactionModal({
           setError("Udfyld navn og et gyldigt beløb.");
           return;
         }
+        if (recurrence !== "once" && recurrenceEndOn && recurrenceEndOn < occurredOn) {
+          setError("Sidste betaling skal ligge på eller efter første betaling.");
+          return;
+        }
         setBusy(true);
         setError(null);
-        const saved = await onSave({ merchant: merchant.trim(), amount: numericAmount, direction, occurredOn, categoryId: direction === "expense" ? categoryId || null : null, recurrence, status: initial ? transactionStatus : undefined });
+        const saved = await onSave({ merchant: merchant.trim(), amount: numericAmount, direction, occurredOn, categoryId: direction === "expense" ? categoryId || null : null, recurrence, recurrenceEndOn: recurrence === "once" ? null : recurrenceEndOn || null, recurrenceGroupId: initial?.recurrenceGroupId, status: initial ? transactionStatus : undefined, linkedDocumentIds });
         if (!saved) setError("Posteringen kunne ikke gemmes. Prøv igen.");
         setBusy(false);
       }} role="dialog">
@@ -943,9 +991,15 @@ function TransactionModal({
           <label>Beløb<input inputMode="decimal" min="0.01" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" required step="0.01" type="number" value={amount} /></label>
           <label>Dato<input onChange={(event) => setOccurredOn(event.target.value)} required type="date" value={occurredOn} /></label>
           {direction === "expense" ? <label className="wide">Kategori<select onChange={(event) => setCategoryId(event.target.value)} value={categoryId}><option value="">Ikke kategoriseret</option>{selectableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label> : null}
-          <label className="wide"><span className="field-label-with-icon"><Repeat2 size={15} />Gentagelse</span><select disabled={Boolean(initial?.recurrenceGroupId)} onChange={(event) => setRecurrence(event.target.value as TransactionRecurrence)} value={recurrence}><option value="once">Kun denne måned</option><option value="monthly">Hver måned</option><option value="every_2_months">Hver anden måned</option><option value="quarterly">Hvert kvartal</option><option value="half_yearly">Hvert halve år</option></select>{initial?.recurrenceGroupId ? <small>Gentagelsen er låst; denne forekomst kan stadig rettes.</small> : <small>Gentagelser oprettes 12 måneder frem.</small>}</label>
+          <label className="wide"><span className="field-label-with-icon"><Repeat2 size={15} />Gentagelse</span><select onChange={(event) => { const value = event.target.value as TransactionRecurrence; setRecurrence(value); if (value === "once") setRecurrenceEndOn(""); }} value={recurrence}><option value="once">Kun denne måned</option><option value="monthly">Hver måned</option><option value="every_2_months">Hver anden måned</option><option value="quarterly">Hvert kvartal</option><option value="half_yearly">Hvert halve år</option></select><small>{recurrence === "once" ? "Posteringen gælder kun den valgte dato." : recurrenceEndOn ? "Serien stopper på den valgte dato." : "Fortsætter løbende uden slutdato."}</small></label>
+          {recurrence !== "once" ? <label className="wide">Sidste betaling <span className="optional-label">(valgfri)</span><input min={occurredOn} onChange={(event) => setRecurrenceEndOn(event.target.value)} type="date" value={recurrenceEndOn} /><small>Lad feltet stå tomt, hvis betalingen skal fortsætte.</small></label> : null}
           {initial ? <label className="wide">Status<select onChange={(event) => setTransactionStatus(event.target.value as typeof transactionStatus)} value={transactionStatus}><option value="approved">Bogført</option><option value="scheduled">Planlagt</option></select></label> : null}
         </div>
+        {recurrence !== "once" ? <section className="transaction-schedule" aria-labelledby="transaction-schedule-title"><div><h3 id="transaction-schedule-title">Betalingsplan</h3><span>{occurrenceDates.length} viste betalinger</span></div><ol>{occurrenceDates.map((date) => <li key={date}><time dateTime={date}>{transactionDateLabel(date)}</time><span>{date <= new Date().toISOString().slice(0, 10) ? "Bogført" : "Planlagt"}</span><strong>{direction === "income" ? "+" : "−"}{amount ? currency.format(Number(amount.replace(",", ".")) || 0) : currency.format(0)}</strong></li>)}</ol>{!recurrenceEndOn ? <p>Serien fortsætter efter de viste betalinger, indtil du tilføjer en sidste betalingsdato.</p> : null}</section> : null}
+        <section className="document-link-section" aria-labelledby="transaction-documents-title">
+          <div><h3 id="transaction-documents-title"><Link2 size={16} />Tilknyttede dokumenter</h3><span>{linkedDocumentIds.length} valgt</span></div>
+          {documents.length ? <div className="document-link-list">{documents.map((document) => <div className="document-link-row" key={document.id}><label><input checked={linkedDocumentIds.includes(document.id)} onChange={(event) => setLinkedDocumentIds((ids) => event.target.checked ? [...new Set([...ids, document.id])] : ids.filter((id) => id !== document.id))} type="checkbox" /><span><strong>{document.title}</strong><small>{documentKindLabel(document.kind)}</small></span></label>{initial && linkedDocumentIds.includes(document.id) ? <button aria-label={`Åbn ${document.title}`} onClick={() => void onOpenDocument(document)} type="button"><ExternalLink size={14} /></button> : null}</div>)}</div> : <p>Upload først et dokument under Dokumenter, og tilknyt det derefter her.</p>}
+        </section>
         {error ? <p className="modal-error" role="alert">{error}</p> : null}
         <div className="transaction-modal-actions">
           {initial ? <button className="danger-button" disabled={busy} onClick={async () => { if (!window.confirm(`Slet posteringen “${initial.merchant}”?`)) return; setBusy(true); const deleted = await onDelete(initial.id); if (!deleted) setError("Posteringen kunne ikke slettes. Prøv igen."); setBusy(false); }} type="button"><Trash2 size={16} />Slet</button> : null}
@@ -954,6 +1008,96 @@ function TransactionModal({
       </form>
     </div>
   );
+}
+
+function daysUntil(date: string | null) {
+  if (!date) return null;
+  return Math.ceil((new Date(`${date}T12:00:00`).getTime() - new Date().setHours(12, 0, 0, 0)) / 86400000);
+}
+
+function subscriptionStatusLabel(status: SubscriptionStatus) {
+  return status === "trial" ? "Prøveperiode" : status === "cancelled" ? "Opsagt" : "Aktiv";
+}
+
+function SubscriptionsView({ subscriptions, transactions, documents, onAdd, onEdit, onDelete, onOpenDocument }: { subscriptions: Subscription[]; transactions: FinanceTransaction[]; documents: HouseholdDocument[]; onAdd: () => void; onEdit: (subscription: Subscription) => void; onDelete: (subscription: Subscription) => Promise<boolean>; onOpenDocument: (document: HouseholdDocument) => void | Promise<void> }) {
+  const activeSubscriptions = subscriptions.filter((subscription) => subscription.status !== "cancelled");
+  const monthlyCost = activeSubscriptions.reduce((sum, subscription) => sum + (subscription.amount ?? 0) / subscription.billingIntervalMonths, 0);
+  const deadlines = activeSubscriptions.filter((subscription) => subscription.cancellationDeadlineOn).sort((a, b) => (a.cancellationDeadlineOn ?? "").localeCompare(b.cancellationDeadlineOn ?? ""));
+  const documentById = new Map(documents.map((document) => [document.id, document]));
+  const transactionById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
+  return (
+    <div className="finance-page subscriptions-page">
+      <header className="compact-page-header"><div><p>Saml betaling, opsigelsesfrist, konto og dokumentation ét sted.</p></div><button className="primary-button" onClick={onAdd} type="button"><Plus size={17} />Nyt abonnement</button></header>
+      <div className="subscription-layout">
+        <Panel className="wide-panel subscription-list-panel">
+          <SectionTitle title="Dine abonnementer" />
+          <div className="subscription-list">
+            {subscriptions.map((subscription) => {
+              const deadlineDays = daysUntil(subscription.cancellationDeadlineOn);
+              const linkedTransaction = subscription.linkedTransactionId ? transactionById.get(subscription.linkedTransactionId) : null;
+              return <article key={subscription.id} className="subscription-row">
+                <button className="subscription-open" onClick={() => onEdit(subscription)} type="button"><span className="subscription-icon"><Repeat2 size={18} /></span><span><strong>{subscription.name}</strong><small>{subscriptionIntervalLabel(subscription.billingIntervalMonths)}{linkedTransaction ? ` · ${linkedTransaction.merchant}` : ""}</small></span><span className="subscription-price"><strong>{subscription.amount === null ? "–" : currency.format(subscription.amount)}</strong><small className={deadlineDays !== null && deadlineDays <= 14 ? "deadline-soon" : ""}>{deadlineDays === null ? subscriptionStatusLabel(subscription.status) : deadlineDays < 0 ? "Frist overskredet" : `${deadlineDays} dage til frist`}</small></span></button>
+                <button aria-label={`Slet ${subscription.name}`} className="transaction-delete-button" onClick={async () => { if (window.confirm(`Slet abonnementet “${subscription.name}”?`)) await onDelete(subscription); }} type="button"><Trash2 size={16} /></button>
+              </article>;
+            })}
+            {!subscriptions.length ? <div className="empty-state"><Repeat2 size={18} />Ingen abonnementer endnu</div> : null}
+          </div>
+        </Panel>
+        <aside className="subscription-aside">
+          <Panel><small>Månedlig værdi</small><strong className="aside-value">{currency.format(monthlyCost)}</strong><p>Omregnet ud fra {activeSubscriptions.length} aktive abonnement{activeSubscriptions.length === 1 ? "" : "er"}.</p></Panel>
+          <Panel><SectionTitle title="Næste frister" />{deadlines.length ? <div className="deadline-list">{deadlines.slice(0, 4).map((subscription) => <button key={subscription.id} onClick={() => onEdit(subscription)} type="button"><span><strong>{subscription.name}</strong><small>{transactionDateLabel(subscription.cancellationDeadlineOn!)}</small></span><ChevronRight size={15} /></button>)}</div> : <p className="aside-empty">Ingen opsigelsesfrister registreret.</p>}</Panel>
+          <Panel><SectionTitle title="Dokumenter" /><p className="aside-empty">{subscriptions.reduce((sum, subscription) => sum + subscription.linkedDocumentIds.length, 0)} dokumentlinks på abonnementer.</p>{subscriptions.flatMap((subscription) => subscription.linkedDocumentIds).slice(0, 3).map((id) => documentById.get(id)).filter((document): document is HouseholdDocument => Boolean(document)).map((document) => <button className="aside-link" key={document.id} onClick={() => void onOpenDocument(document)} type="button"><FileText size={15} />{document.title}</button>)}</Panel>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionModal({ initial, transactions, documents, onClose, onDelete, onOpenDocument, onSave }: { initial?: Subscription | null; transactions: FinanceTransaction[]; documents: HouseholdDocument[]; onClose: () => void; onDelete: (subscriptionId: string) => Promise<boolean>; onOpenDocument: (document: HouseholdDocument) => void | Promise<void>; onSave: (subscription: NewSubscription) => Promise<boolean> }) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [websiteUrl, setWebsiteUrl] = useState(initial?.websiteUrl ?? "");
+  const [accountIdentifier, setAccountIdentifier] = useState(initial?.accountIdentifier ?? "");
+  const [passwordManagerUrl, setPasswordManagerUrl] = useState(initial?.passwordManagerUrl ?? "");
+  const [amount, setAmount] = useState(initial?.amount === null || initial?.amount === undefined ? "" : String(initial.amount));
+  const [billingIntervalMonths, setBillingIntervalMonths] = useState(initial?.billingIntervalMonths ?? 1);
+  const [trialEndsOn, setTrialEndsOn] = useState(initial?.trialEndsOn ?? "");
+  const [cancellationDeadlineOn, setCancellationDeadlineOn] = useState(initial?.cancellationDeadlineOn ?? "");
+  const [nextPaymentOn, setNextPaymentOn] = useState(initial?.nextPaymentOn ?? "");
+  const [status, setStatus] = useState<SubscriptionStatus>(initial?.status ?? "active");
+  const [linkedTransactionId, setLinkedTransactionId] = useState(initial?.linkedTransactionId ?? "");
+  const [linkedDocumentIds, setLinkedDocumentIds] = useState<string[]>(initial?.linkedDocumentIds ?? []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><form aria-labelledby="subscription-modal-title" aria-modal="true" className="quick-modal transaction-modal subscription-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
+    event.preventDefault();
+    if (!name.trim()) { setError("Giv abonnementet et navn."); return; }
+    const numericAmount = amount ? Number(amount.replace(",", ".")) : null;
+    if (numericAmount !== null && !isValidFinanceAmount(numericAmount)) { setError("Beløbet er ikke gyldigt."); return; }
+    setBusy(true); setError(null);
+    const saved = await onSave({ name: name.trim(), websiteUrl: websiteUrl.trim() || null, accountIdentifier: accountIdentifier.trim() || null, passwordManagerUrl: passwordManagerUrl.trim() || null, amount: numericAmount, billingIntervalMonths, trialEndsOn: trialEndsOn || null, cancellationDeadlineOn: cancellationDeadlineOn || null, nextPaymentOn: nextPaymentOn || null, status, linkedTransactionId: linkedTransactionId || null, linkedDocumentIds });
+    if (!saved) setError("Abonnementet kunne ikke gemmes. Prøv igen.");
+    setBusy(false);
+  }} role="dialog">
+    <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
+    <span className="modal-icon"><Repeat2 size={20} /></span>
+    <div><h2 id="subscription-modal-title">{initial ? "Redigér abonnement" : "Nyt abonnement"}</h2><p className="modal-intro">Gem frister og forbind dokumentation — men opbevar selve adgangskoden i din password manager.</p></div>
+    <div className="transaction-grid">
+      <label className="wide">Navn<input autoFocus maxLength={160} onChange={(event) => setName(event.target.value)} placeholder="Fx Netflix eller mobilabonnement" required value={name} /></label>
+      <label>Beløb<input min="0" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" step="0.01" type="number" value={amount} /></label>
+      <label>Periode<select onChange={(event) => setBillingIntervalMonths(Number(event.target.value))} value={billingIntervalMonths}><option value={1}>Hver måned</option><option value={3}>Hvert kvartal</option><option value={6}>Hvert halve år</option><option value={12}>Hvert år</option></select></label>
+      <label className="wide">Webadresse<input onChange={(event) => setWebsiteUrl(event.target.value)} placeholder="https://…" type="url" value={websiteUrl} /></label>
+      <label className="wide">Login-mail eller brugernavn<input onChange={(event) => setAccountIdentifier(event.target.value)} placeholder="Mail eller brugernavn — aldrig adgangskoden" value={accountIdentifier} /></label>
+      <label className="wide"><span className="field-label-with-icon"><KeyRound size={15} />Link til password manager</span><input onChange={(event) => setPasswordManagerUrl(event.target.value)} placeholder="https://…" type="url" value={passwordManagerUrl} /></label>
+      <label>Prøveperiode slutter<input onChange={(event) => setTrialEndsOn(event.target.value)} type="date" value={trialEndsOn} /></label>
+      <label>Sidste opsigelsesdag<input onChange={(event) => setCancellationDeadlineOn(event.target.value)} type="date" value={cancellationDeadlineOn} /></label>
+      <label>Næste betaling<input onChange={(event) => setNextPaymentOn(event.target.value)} type="date" value={nextPaymentOn} /></label>
+      <label>Status<select onChange={(event) => setStatus(event.target.value as SubscriptionStatus)} value={status}><option value="trial">Prøveperiode</option><option value="active">Aktiv</option><option value="cancelled">Opsagt</option></select></label>
+      <label className="wide">Tilknyttet postering<select onChange={(event) => setLinkedTransactionId(event.target.value)} value={linkedTransactionId}><option value="">Ingen postering</option>{transactions.map((transaction) => <option key={transaction.id} value={transaction.id}>{transaction.merchant} · {currency.format(transaction.amount)}</option>)}</select></label>
+    </div>
+    <section className="document-link-section"><div><h3><Link2 size={16} />Dokumenter</h3><span>{linkedDocumentIds.length} valgt</span></div>{documents.length ? <div className="document-link-list">{documents.map((document) => <div className="document-link-row" key={document.id}><label><input checked={linkedDocumentIds.includes(document.id)} onChange={(event) => setLinkedDocumentIds((ids) => event.target.checked ? [...new Set([...ids, document.id])] : ids.filter((id) => id !== document.id))} type="checkbox" /><span><strong>{document.title}</strong><small>{documentKindLabel(document.kind)}</small></span></label>{initial && linkedDocumentIds.includes(document.id) ? <button aria-label={`Åbn ${document.title}`} onClick={() => void onOpenDocument(document)} type="button"><ExternalLink size={14} /></button> : null}</div>)}</div> : <p>Upload først et dokument under Dokumenter.</p>}</section>
+    {error ? <p className="modal-error" role="alert">{error}</p> : null}
+    <div className="transaction-modal-actions">{initial ? <button className="danger-button" disabled={busy} onClick={async () => { if (!window.confirm(`Slet abonnementet “${initial.name}”?`)) return; setBusy(true); const deleted = await onDelete(initial.id); if (!deleted) setError("Abonnementet kunne ikke slettes."); setBusy(false); }} type="button"><Trash2 size={16} />Slet</button> : <span />}<button className="primary-button" disabled={busy} type="submit">{busy ? "Gemmer…" : "Gem abonnement"}</button></div>
+  </form></div>;
 }
 
 function DocumentUploadModal({
@@ -1037,6 +1181,7 @@ function readFinanceRoute(pathname: string): { section: FinanceSection; category
   if (categoryMatch) return { section: "category", categoryId: decodeURIComponent(categoryMatch[1]) };
   if (/^\/oekonomi\/budget\/?$/.test(pathname)) return { section: "budget", categoryId: null };
   if (/^\/oekonomi\/posteringer\/?$/.test(pathname)) return { section: "transactions", categoryId: null };
+  if (/^\/oekonomi\/abonnementer\/?$/.test(pathname)) return { section: "subscriptions", categoryId: null };
   if (/^\/oekonomi\/?$/.test(pathname)) return { section: "overview", categoryId: null };
   return null;
 }
@@ -1045,12 +1190,31 @@ function financeRoute(section: FinanceSection, categoryId?: string | null) {
   if (section === "category" && categoryId) return `/oekonomi/kategorier/${encodeURIComponent(categoryId)}`;
   if (section === "budget") return "/oekonomi/budget";
   if (section === "transactions") return "/oekonomi/posteringer";
+  if (section === "subscriptions") return "/oekonomi/abonnementer";
   return "/oekonomi";
 }
 
-export function HouseholdApp({ householdId, householdName = "Mit hjem", user, onSignOut }: HouseholdAppProps = {}) {
-  const initialFinanceRoute = typeof window === "undefined" ? null : readFinanceRoute(window.location.pathname);
-  const [view, setView] = useState<View>(initialFinanceRoute ? "finance" : "overview");
+const viewRoutes: Record<Exclude<View, "finance">, string> = {
+  overview: "/overblik",
+  documents: "/dokumenter",
+  tasks: "/opgaver",
+  calendar: "/kalender",
+  shopping: "/indkoeb",
+  meals: "/madplan",
+  household: "/husstand",
+  settings: "/indstillinger",
+};
+
+function readViewRoute(pathname: string): View {
+  const normalized = pathname.length > 1 ? pathname.replace(/\/$/, "") : pathname;
+  const match = (Object.entries(viewRoutes) as [Exclude<View, "finance">, string][]).find(([, route]) => route === normalized);
+  return match?.[0] ?? "overview";
+}
+
+export function HouseholdApp({ householdId, householdName = "Mit hjem", initialPath, user, onSignOut }: HouseholdAppProps = {}) {
+  const initialPathname = initialPath ?? (typeof window === "undefined" ? "/" : window.location.pathname);
+  const initialFinanceRoute = readFinanceRoute(initialPathname);
+  const [view, setView] = useState<View>(initialFinanceRoute ? "finance" : readViewRoute(initialPathname));
   const [financeSection, setFinanceSection] = useState<FinanceSection>(initialFinanceRoute?.section ?? "overview");
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(initialFinanceRoute?.categoryId ?? null);
   const [template, setTemplate] = useState<TemplateName>(productConfig.defaultTemplate);
@@ -1084,6 +1248,9 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
   const [editingTransaction, setEditingTransaction] = useState<FinanceTransaction | null>(null);
   const [transactionCategoryId, setTransactionCategoryId] = useState<string | null>(null);
   const [financeTransactions, setFinanceTransactions] = useState<FinanceTransaction[]>(householdId ? [] : demoFinance.transactions);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>(householdId ? [] : demoSubscriptions);
+  const [subscriptionOpen, setSubscriptionOpen] = useState(false);
+  const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null);
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [documentUploadOpen, setDocumentUploadOpen] = useState(false);
   const [printTarget, setPrintTarget] = useState<"budget" | "meal" | null>(null);
@@ -1132,7 +1299,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
         setFinanceSection(route.section);
         setSelectedCategoryId(route.categoryId);
       } else {
-        setView("overview");
+        setView(readViewRoute(window.location.pathname));
         setFinanceSection("overview");
         setSelectedCategoryId(null);
       }
@@ -1152,7 +1319,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       userId ? loadFinancePeriod(householdId, userId, budgetPeriodMode, budgetYear) : Promise.resolve(createDemoPeriodFinance(budgetPeriodMode, budgetYear)),
       userId ? loadFinanceTransactions(householdId) : Promise.resolve(demoFinance.transactions),
       loadDocuments(householdId),
-    ]).then(([taskResult, shoppingResult, financeResult, financePeriodResult, transactionsResult, documentsResult]) => {
+      loadSubscriptions(householdId),
+    ]).then(([taskResult, shoppingResult, financeResult, financePeriodResult, transactionsResult, documentsResult, subscriptionsResult]) => {
       if (!active) return;
       if (taskResult.error || shoppingResult.error) {
         setSyncState("error");
@@ -1174,15 +1342,20 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       setFinancePeriod(financePeriodResult);
       setFinanceTransactions(transactionsResult);
       setHouseholdDocuments(documentsResult);
+      setSubscriptions(subscriptionsResult);
       setSyncState("synced");
     }).catch(() => { if (active) setSyncState("error"); });
     return () => { active = false; };
   }, [budgetPeriodMode, budgetYear, householdId, userId]);
 
-  const title = useMemo(() => visibleNavItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view, visibleNavItems]);
   const selectedCategory = finance.categories.find((category) => category.id === selectedCategoryId) ?? null;
+  const title = useMemo(() => visibleNavItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view, visibleNavItems]);
   const displayName = user?.displayName || "Anders";
   const firstName = displayName.split(/\s+/)[0] || displayName;
+  const topbarHeading = view === "finance" ? "Økonomi" : view === "overview" ? "Overblik" : title;
+  const topbarSubheading = view === "finance"
+    ? financeSection === "budget" ? "Budget" : financeSection === "transactions" ? "Posteringer" : financeSection === "subscriptions" ? "Abonnementer" : financeSection === "category" ? selectedCategory?.name ?? "Kategori" : "Overblik"
+    : view === "overview" ? `Godmorgen, ${firstName} 👋` : householdName;
   const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "MH";
   const setLocalToggle = (setter: React.Dispatch<React.SetStateAction<ChecklistItem[]>>) => (id: ChecklistItem["id"]) => setter((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
   const toggleTask = async (id: ChecklistItem["id"]) => {
@@ -1223,7 +1396,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
     setView(next);
     setFinanceSection("overview");
     setSelectedCategoryId(null);
-    window.history.pushState(null, "", "/");
+    window.history.pushState(null, "", viewRoutes[next as Exclude<View, "finance">]);
     setMobileMenu(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -1265,7 +1438,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
     if (!householdId || !user) return false;
     setSyncState("saving");
     try {
-      if (editingTransaction) await updateFinanceTransaction(householdId, editingTransaction.id, transaction);
+      if (editingTransaction) await updateFinanceTransaction(householdId, user.id, editingTransaction.id, transaction);
       else await addFinanceTransaction(householdId, user.id, transaction);
       await refreshFinance();
       setTransactionOpen(false);
@@ -1287,6 +1460,43 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       setTransactionOpen(false);
       setEditingTransaction(null);
       setTransactionCategoryId(null);
+      setSyncState("synced");
+      return true;
+    } catch {
+      setSyncState("error");
+      return false;
+    }
+  };
+  const openNewSubscription = () => { setEditingSubscription(null); setSubscriptionOpen(true); };
+  const openSubscription = (subscription: Subscription) => { setEditingSubscription(subscription); setSubscriptionOpen(true); };
+  const refreshSubscriptions = async () => {
+    if (!householdId) return;
+    setSubscriptions(await loadSubscriptions(householdId));
+  };
+  const saveSubscription = async (subscription: NewSubscription) => {
+    if (!householdId || !user) return false;
+    setSyncState("saving");
+    try {
+      if (editingSubscription) await updateSubscription(householdId, user.id, editingSubscription.id, subscription);
+      else await addSubscription(householdId, user.id, subscription);
+      await refreshSubscriptions();
+      setSubscriptionOpen(false);
+      setEditingSubscription(null);
+      setSyncState("synced");
+      return true;
+    } catch {
+      setSyncState("error");
+      return false;
+    }
+  };
+  const removeSubscription = async (subscriptionId: string) => {
+    if (!householdId || !user) return false;
+    setSyncState("saving");
+    try {
+      await deleteSubscription(householdId, subscriptionId);
+      await refreshSubscriptions();
+      setSubscriptionOpen(false);
+      setEditingSubscription(null);
       setSyncState("synced");
       return true;
     } catch {
@@ -1426,7 +1636,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       <div className="app-content">
         <header className="topbar">
           <button aria-label="Åbn menu" className="menu-button" onClick={() => setMobileMenu((open) => !open)} type="button"><Menu size={21} /></button>
-          <div><small>{view === "overview" ? `Godmorgen, ${firstName} 👋` : householdName}</small><strong>{view === "overview" ? "Her er overblikket over jeres hjem." : title}</strong></div>
+          <div><small>{topbarHeading}</small><strong>{topbarSubheading}</strong></div>
           <div className="top-actions">
             <div className="export-wrap">
               <button className="export-button" onClick={() => setExportOpen((open) => !open)} type="button"><Download size={16} /><span>Eksportér</span><ChevronDown size={13} /></button>
@@ -1455,15 +1665,17 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
                 <button aria-selected={financeSection === "overview"} className={financeSection === "overview" ? "active" : ""} onClick={() => navigateFinance("overview")} role="tab" type="button">Overblik</button>
                 <button aria-selected={financeSection === "budget"} className={financeSection === "budget" ? "active" : ""} onClick={() => navigateFinance("budget")} role="tab" type="button">Budget</button>
                 <button aria-selected={financeSection === "transactions"} className={financeSection === "transactions" ? "active" : ""} onClick={() => navigateFinance("transactions")} role="tab" type="button">Posteringer</button>
+                <button aria-selected={financeSection === "subscriptions"} className={financeSection === "subscriptions" ? "active" : ""} onClick={() => navigateFinance("subscriptions")} role="tab" type="button">Abonnementer</button>
               </div>
               {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} onPlannedChange={savePlannedAmount} /> : null}
               {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={saveFinanceCategory} onAddTransaction={() => openNewTransaction()} onExport={() => exportPdf("budget")} onIncomeChange={savePeriodIncome} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onPeriodModeChange={setBudgetPeriodMode} onPlannedChange={savePeriodPlannedAmounts} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
-              {financeSection === "transactions" ? <TransactionsView categories={finance.categories} onAdd={() => openNewTransaction()} onEdit={openTransaction} transactions={financeTransactions} /> : null}
+              {financeSection === "transactions" ? <TransactionsView categories={finance.categories} onAdd={() => openNewTransaction()} onDelete={(transaction) => removeTransaction(transaction.id)} onEdit={openTransaction} transactions={financeTransactions} /> : null}
+              {financeSection === "subscriptions" ? <SubscriptionsView documents={householdDocuments} onAdd={openNewSubscription} onDelete={(subscription) => removeSubscription(subscription.id)} onEdit={openSubscription} onOpenDocument={openDocument} subscriptions={subscriptions} transactions={financeTransactions} /> : null}
               {financeSection === "category" && selectedCategory ? <CategoryDetailView category={selectedCategory} onAddTransaction={() => openNewTransaction(selectedCategory.id)} onBack={() => navigateFinance("overview")} onEditTransaction={openTransaction} onPlannedChange={savePlannedAmount} transactions={financeTransactions} /> : null}
               {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
             </div>
           ) : null}
-          {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} member={user ? { name: user.displayName, email: user.email } : undefined} /> : null}
+          {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} /> : null}
           {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
       </div>
@@ -1474,7 +1686,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       </nav>
 
       {quickAdd ? <QuickAdd kind={quickAdd} onClose={() => setQuickAdd(null)} onAdd={addItem} /> : null}
-      {transactionOpen ? <TransactionModal categories={finance.categories} initial={editingTransaction} preferredCategoryId={transactionCategoryId} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); }} onDelete={removeTransaction} onSave={saveTransaction} /> : null}
+      {transactionOpen ? <TransactionModal categories={finance.categories} documents={householdDocuments} initial={editingTransaction} preferredCategoryId={transactionCategoryId} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); }} onDelete={removeTransaction} onOpenDocument={openDocument} onSave={saveTransaction} /> : null}
+      {subscriptionOpen ? <SubscriptionModal documents={householdDocuments} initial={editingSubscription} onClose={() => { setSubscriptionOpen(false); setEditingSubscription(null); }} onDelete={removeSubscription} onOpenDocument={openDocument} onSave={saveSubscription} transactions={financeTransactions} /> : null}
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = await saveFinanceCategory(name, categoryType); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
       <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} />

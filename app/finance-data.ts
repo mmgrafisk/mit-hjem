@@ -24,6 +24,8 @@ export type FinanceTransaction = {
   status: "approved" | "scheduled";
   recurrence: TransactionRecurrence;
   recurrenceGroupId: string | null;
+  recurrenceEndOn: string | null;
+  linkedDocumentIds: string[];
 };
 
 export type FinanceSnapshot = {
@@ -44,7 +46,10 @@ export type NewTransaction = {
   occurredOn: string;
   categoryId: string | null;
   recurrence: TransactionRecurrence;
+  recurrenceEndOn: string | null;
+  recurrenceGroupId?: string | null;
   status?: "approved" | "scheduled";
+  linkedDocumentIds?: string[];
 };
 
 export type TransactionRecurrence = "once" | "monthly" | "every_2_months" | "quarterly" | "half_yearly";
@@ -115,21 +120,54 @@ function dateKey(year: number, monthIndex: number, day: number) {
   return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
 }
 
-export function recurringTransactionDates(startDate: string, recurrence: TransactionRecurrence) {
+type RecurringTransactionDateOptions = {
+  fromDate?: string;
+  throughDate?: string;
+  endDate?: string | null;
+  limit?: number;
+};
+
+export function recurringTransactionDates(startDate: string, recurrence: TransactionRecurrence, options: RecurringTransactionDateOptions = {}) {
   const interval = recurrenceIntervals[recurrence];
-  if (!interval) return [startDate];
   const start = new Date(`${startDate}T12:00:00`);
   if (Number.isNaN(start.getTime())) return [];
-  return Array.from({ length: Math.floor(11 / interval) + 1 }, (_, index) => {
+  const fromDate = options.fromDate ?? startDate;
+  const throughDate = [options.throughDate, options.endDate].filter((date): date is string => Boolean(date)).sort()[0] ?? startDate;
+  if (!interval) return startDate >= fromDate && startDate <= throughDate ? [startDate] : [];
+
+  const dates: string[] = [];
+  const limit = Math.max(1, options.limit ?? 240);
+  for (let index = 0; dates.length < limit; index += 1) {
     const monthOffset = index * interval;
     const year = start.getFullYear() + Math.floor((start.getMonth() + monthOffset) / 12);
     const monthIndex = (start.getMonth() + monthOffset) % 12;
-    return dateKey(year, monthIndex, start.getDate());
-  });
+    const candidate = dateKey(year, monthIndex, start.getDate());
+    if (candidate > throughDate) break;
+    if (candidate >= fromDate) dates.push(candidate);
+  }
+  return dates;
 }
 
 function recurrenceFromInterval(interval: number | null): TransactionRecurrence {
   return (Object.entries(recurrenceIntervals).find(([, value]) => value === interval)?.[0] as TransactionRecurrence | undefined) ?? "once";
+}
+
+export function collapseRecurringTransactions(transactions: FinanceTransaction[]) {
+  const bySeries = new Map<string, FinanceTransaction>();
+  for (const transaction of transactions) {
+    const key = transaction.recurrenceGroupId ?? transaction.id;
+    const current = bySeries.get(key);
+    if (!current || transaction.occurredOn < current.occurredOn) bySeries.set(key, transaction);
+  }
+  return [...bySeries.values()].sort((left, right) => right.occurredOn.localeCompare(left.occurredOn));
+}
+
+function transactionDatesInRange(transaction: FinanceTransaction, fromDate: string, throughDate: string) {
+  return recurringTransactionDates(transaction.occurredOn, transaction.recurrence, {
+    fromDate,
+    throughDate,
+    endDate: transaction.recurrenceEndOn,
+  });
 }
 
 export function isValidFinanceAmount(value: number, allowZero = true) {
@@ -146,11 +184,11 @@ export function budgetCategorySummaryTotals(categories: Array<Pick<FinanceYearCa
 }
 
 const defaultCategories = [
-  { name: "Bolig", color: "#2158E8", categoryType: "fixed_expense", planned: 9000 },
-  { name: "Mad & husholdning", color: "#20A874", categoryType: "variable_expense", planned: 7000 },
-  { name: "Transport", color: "#8267DF", categoryType: "fixed_expense", planned: 3500 },
-  { name: "Forsikring", color: "#FF9A5C", categoryType: "fixed_expense", planned: 1500 },
-  { name: "Fritid", color: "#D85B8C", categoryType: "variable_expense", planned: 2000 },
+  { name: "Bolig", color: "#2158E8", categoryType: "fixed_expense", planned: 0 },
+  { name: "Mad & husholdning", color: "#20A874", categoryType: "variable_expense", planned: 0 },
+  { name: "Transport", color: "#8267DF", categoryType: "fixed_expense", planned: 0 },
+  { name: "Forsikring", color: "#FF9A5C", categoryType: "fixed_expense", planned: 0 },
+  { name: "Fritid", color: "#D85B8C", categoryType: "variable_expense", planned: 0 },
 ] as const;
 
 function monthKey(date = new Date()) {
@@ -282,16 +320,22 @@ export async function loadFinance(householdId: string, userId: string): Promise<
   const supabase = getSupabaseBrowserClient();
   const { budget, categories } = await ensureCurrentBudget(householdId, userId);
   const endMonth = nextMonthKey(budget.month);
-  const [itemsResult, transactionsResult] = await Promise.all([
+  const [itemsResult, transactionsResult, documentLinksResult] = await Promise.all([
     supabase.from("budget_items").select("id, category_id, planned_amount").eq("household_id", householdId).eq("budget_id", budget.id),
-    supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id").eq("household_id", householdId).gte("occurred_on", budget.month).lt("occurred_on", endMonth).in("status", ["approved", "scheduled"]).order("occurred_on", { ascending: false }).order("created_at", { ascending: false }),
+    supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id, recurrence_end_on").eq("household_id", householdId).lt("occurred_on", endMonth).in("status", ["approved", "scheduled"]).order("occurred_on", { ascending: false }).order("created_at", { ascending: false }),
+    supabase.from("transaction_documents").select("transaction_id, document_id").eq("household_id", householdId),
   ]);
   if (itemsResult.error) throw itemsResult.error;
   if (transactionsResult.error) throw transactionsResult.error;
+  if (documentLinksResult.error) throw documentLinksResult.error;
 
   const categoryById = new Map(categories.map((category) => [category.id, category]));
   const itemsByCategory = new Map((itemsResult.data ?? []).map((item) => [item.category_id, item]));
-  const transactions: FinanceTransaction[] = (transactionsResult.data ?? []).map((transaction) => ({
+  const documentIdsByTransaction = new Map<string, string[]>();
+  for (const link of documentLinksResult.data ?? []) {
+    documentIdsByTransaction.set(link.transaction_id, [...(documentIdsByTransaction.get(link.transaction_id) ?? []), link.document_id]);
+  }
+  const storedTransactions: FinanceTransaction[] = (transactionsResult.data ?? []).map((transaction) => ({
     id: transaction.id,
     merchant: transaction.merchant,
     amount: Number(transaction.amount),
@@ -302,7 +346,19 @@ export async function loadFinance(householdId: string, userId: string): Promise<
     status: transaction.status as "approved" | "scheduled",
     recurrence: recurrenceFromInterval(transaction.recurrence_interval_months),
     recurrenceGroupId: transaction.recurrence_group_id,
+    recurrenceEndOn: transaction.recurrence_end_on,
+    linkedDocumentIds: documentIdsByTransaction.get(transaction.id) ?? [],
   }));
+  const today = new Date().toISOString().slice(0, 10);
+  const throughDate = new Date(`${endMonth}T12:00:00`);
+  throughDate.setDate(throughDate.getDate() - 1);
+  const transactions = collapseRecurringTransactions(storedTransactions).flatMap((transaction) =>
+    transactionDatesInRange(transaction, budget.month, throughDate.toISOString().slice(0, 10)).map((occurredOn) => ({
+      ...transaction,
+      occurredOn,
+      status: transaction.recurrence === "once" ? transaction.status : occurredOn <= today ? "approved" as const : "scheduled" as const,
+    })),
+  );
 
   const categorySpend = new Map<string, number>();
   let uncategorizedSpend = 0;
@@ -356,59 +412,88 @@ export async function loadFinance(householdId: string, userId: string): Promise<
 }
 
 export async function addFinanceTransaction(householdId: string, userId: string, transaction: NewTransaction) {
-  const dates = recurringTransactionDates(transaction.occurredOn, transaction.recurrence);
   const recurrenceInterval = recurrenceIntervals[transaction.recurrence];
   const recurrenceGroupId = recurrenceInterval ? crypto.randomUUID() : null;
   const today = new Date().toISOString().slice(0, 10);
-  const result = await getSupabaseBrowserClient().from("transactions").insert(dates.map((occurredOn, index) => ({
+  const supabase = getSupabaseBrowserClient();
+  const result = await supabase.from("transactions").insert({
     household_id: householdId,
     created_by: userId,
     merchant: transaction.merchant,
     amount: transaction.amount,
     direction: transaction.direction,
-    occurred_on: occurredOn,
+    occurred_on: transaction.occurredOn,
     category_id: transaction.direction === "expense" ? transaction.categoryId : null,
     recurrence_interval_months: recurrenceInterval,
     recurrence_group_id: recurrenceGroupId,
+    recurrence_end_on: recurrenceInterval ? transaction.recurrenceEndOn : null,
     source: "manual",
-    status: index === 0 && occurredOn <= today ? "approved" : "scheduled",
-  })));
+    status: transaction.occurredOn <= today ? "approved" : "scheduled",
+  }).select("id").single();
   if (result.error) throw result.error;
+  await syncTransactionDocuments(householdId, userId, result.data.id, transaction.linkedDocumentIds ?? []);
 }
 
-export async function updateFinanceTransaction(householdId: string, transactionId: string, transaction: NewTransaction) {
+async function syncTransactionDocuments(householdId: string, userId: string, transactionId: string, documentIds: string[]) {
+  const supabase = getSupabaseBrowserClient();
+  const removed = await supabase.from("transaction_documents").delete().eq("household_id", householdId).eq("transaction_id", transactionId);
+  if (removed.error) throw removed.error;
+  const uniqueDocumentIds = [...new Set(documentIds)];
+  if (!uniqueDocumentIds.length) return;
+  const inserted = await supabase.from("transaction_documents").insert(uniqueDocumentIds.map((documentId) => ({ household_id: householdId, transaction_id: transactionId, document_id: documentId, created_by: userId })));
+  if (inserted.error) throw inserted.error;
+}
+
+export async function updateFinanceTransaction(householdId: string, userId: string, transactionId: string, transaction: NewTransaction) {
+  const recurrenceInterval = recurrenceIntervals[transaction.recurrence];
   const result = await getSupabaseBrowserClient().from("transactions").update({
     merchant: transaction.merchant,
     amount: transaction.amount,
     direction: transaction.direction,
     occurred_on: transaction.occurredOn,
     category_id: transaction.direction === "expense" ? transaction.categoryId : null,
+    recurrence_interval_months: recurrenceInterval,
+    recurrence_group_id: recurrenceInterval ? transaction.recurrenceGroupId ?? crypto.randomUUID() : null,
+    recurrence_end_on: recurrenceInterval ? transaction.recurrenceEndOn : null,
     status: transaction.status ?? "approved",
   }).eq("id", transactionId).eq("household_id", householdId).select("id").single();
   if (result.error) throw result.error;
+  await syncTransactionDocuments(householdId, userId, transactionId, transaction.linkedDocumentIds ?? []);
 }
 
 export async function deleteFinanceTransaction(householdId: string, transactionId: string) {
-  const result = await getSupabaseBrowserClient().from("transactions").delete().eq("id", transactionId).eq("household_id", householdId).select("id").single();
+  const supabase = getSupabaseBrowserClient();
+  const lookup = await supabase.from("transactions").select("recurrence_group_id").eq("id", transactionId).eq("household_id", householdId).single();
+  if (lookup.error) throw lookup.error;
+  const query = supabase.from("transactions").delete().eq("household_id", householdId);
+  const result = lookup.data.recurrence_group_id
+    ? await query.eq("recurrence_group_id", lookup.data.recurrence_group_id).select("id")
+    : await query.eq("id", transactionId).select("id");
   if (result.error) throw result.error;
 }
 
 export async function loadFinanceTransactions(householdId: string, limit = 200): Promise<FinanceTransaction[]> {
   const supabase = getSupabaseBrowserClient();
-  const [transactionsResult, categoriesResult] = await Promise.all([
+  const [transactionsResult, categoriesResult, documentLinksResult] = await Promise.all([
     supabase.from("transactions")
-      .select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id")
+      .select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id, recurrence_end_on")
       .eq("household_id", householdId)
       .in("status", ["approved", "scheduled"])
       .order("occurred_on", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(limit),
     supabase.from("budget_categories").select("id, name").eq("household_id", householdId),
+    supabase.from("transaction_documents").select("transaction_id, document_id").eq("household_id", householdId),
   ]);
   if (transactionsResult.error) throw transactionsResult.error;
   if (categoriesResult.error) throw categoriesResult.error;
+  if (documentLinksResult.error) throw documentLinksResult.error;
   const categoryById = new Map((categoriesResult.data ?? []).map((category) => [category.id, category.name]));
-  return (transactionsResult.data ?? []).map((transaction) => ({
+  const documentIdsByTransaction = new Map<string, string[]>();
+  for (const link of documentLinksResult.data ?? []) {
+    documentIdsByTransaction.set(link.transaction_id, [...(documentIdsByTransaction.get(link.transaction_id) ?? []), link.document_id]);
+  }
+  return collapseRecurringTransactions((transactionsResult.data ?? []).map((transaction) => ({
     id: transaction.id,
     merchant: transaction.merchant,
     amount: Number(transaction.amount),
@@ -419,7 +504,9 @@ export async function loadFinanceTransactions(householdId: string, limit = 200):
     status: transaction.status as "approved" | "scheduled",
     recurrence: recurrenceFromInterval(transaction.recurrence_interval_months),
     recurrenceGroupId: transaction.recurrence_group_id,
-  }));
+    recurrenceEndOn: transaction.recurrence_end_on,
+    linkedDocumentIds: documentIdsByTransaction.get(transaction.id) ?? [],
+  })));
 }
 
 export async function updatePlannedAmount(householdId: string, snapshot: FinanceSnapshot, categoryId: string, planned: number) {
@@ -507,7 +594,7 @@ export async function loadFinanceYear(householdId: string, userId: string, year:
 
   const [itemsResult, transactionsResult] = await Promise.all([
     supabase.from("budget_items").select("id, budget_id, category_id, planned_amount").eq("household_id", householdId).in("budget_id", budgetIds.filter(Boolean)),
-    supabase.from("transactions").select("amount, direction, occurred_on, category_id").eq("household_id", householdId).gte("occurred_on", yearStart).lt("occurred_on", nextYearStart).eq("status", "approved"),
+    supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id, recurrence_end_on").eq("household_id", householdId).lt("occurred_on", nextYearStart).in("status", ["approved", "scheduled"]),
   ]);
   if (itemsResult.error) throw itemsResult.error;
   if (transactionsResult.error) throw transactionsResult.error;
@@ -518,17 +605,35 @@ export async function loadFinanceYear(householdId: string, userId: string, year:
   const expenseActual = Array(12).fill(0) as number[];
   const uncategorizedActual = Array(12).fill(0) as number[];
   const actualByCategory = new Map<string, number[]>();
-  for (const transaction of transactionsResult.data ?? []) {
-    const monthIndex = Number(transaction.occurred_on.slice(5, 7)) - 1;
-    const amount = Number(transaction.amount);
-    if (transaction.direction === "income") incomeActual[monthIndex] += amount;
-    else {
-      expenseActual[monthIndex] += amount;
-      if (transaction.category_id) {
-        const values = actualByCategory.get(transaction.category_id) ?? Array(12).fill(0) as number[];
-        values[monthIndex] += amount;
-        actualByCategory.set(transaction.category_id, values);
-      } else uncategorizedActual[monthIndex] += amount;
+  const today = new Date().toISOString().slice(0, 10);
+  const storedTransactions = collapseRecurringTransactions((transactionsResult.data ?? []).map((transaction) => ({
+    id: transaction.id,
+    merchant: transaction.merchant,
+    amount: Number(transaction.amount),
+    direction: transaction.direction as "expense" | "income",
+    occurredOn: transaction.occurred_on,
+    categoryId: transaction.category_id,
+    categoryName: "",
+    status: transaction.status as "approved" | "scheduled",
+    recurrence: recurrenceFromInterval(transaction.recurrence_interval_months),
+    recurrenceGroupId: transaction.recurrence_group_id,
+    recurrenceEndOn: transaction.recurrence_end_on,
+    linkedDocumentIds: [],
+  })));
+  for (const transaction of storedTransactions) {
+    for (const occurredOn of transactionDatesInRange(transaction, yearStart, `${year}-12-31`)) {
+      const isApproved = transaction.recurrence === "once" ? transaction.status === "approved" : occurredOn <= today;
+      if (!isApproved) continue;
+      const monthIndex = Number(occurredOn.slice(5, 7)) - 1;
+      if (transaction.direction === "income") incomeActual[monthIndex] += transaction.amount;
+      else {
+        expenseActual[monthIndex] += transaction.amount;
+        if (transaction.categoryId) {
+          const values = actualByCategory.get(transaction.categoryId) ?? Array(12).fill(0) as number[];
+          values[monthIndex] += transaction.amount;
+          actualByCategory.set(transaction.categoryId, values);
+        } else uncategorizedActual[monthIndex] += transaction.amount;
+      }
     }
   }
 
@@ -563,7 +668,10 @@ export async function loadFinanceYear(householdId: string, userId: string, year:
 export async function loadFinancePeriod(householdId: string, userId: string, mode: BudgetPeriodMode, selectedYear: number): Promise<FinancePeriodSnapshot> {
   const monthKeys = budgetPeriodMonthKeys(mode, selectedYear);
   const years = [...new Set(monthKeys.map((key) => Number(key.slice(0, 4))))];
-  const snapshots = await Promise.all(years.map((year) => loadFinanceYear(householdId, userId, year, monthKeys.filter((key) => Number(key.slice(0, 4)) === year))));
+  const snapshots: FinanceYearSnapshot[] = [];
+  for (const year of years) {
+    snapshots.push(await loadFinanceYear(householdId, userId, year, monthKeys.filter((key) => Number(key.slice(0, 4)) === year)));
+  }
   const snapshotByYear = new Map(snapshots.map((snapshot) => [snapshot.year, snapshot]));
   const months = monthKeys.map((key) => {
     const year = Number(key.slice(0, 4));
