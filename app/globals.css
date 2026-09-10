@@ -477,9 +477,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .export-menu { position: fixed; top: 67px; left: 12px; right: 12px; width: auto; }
   main { padding: 12px 10px 28px; }
   .dashboard-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .dashboard-grid > * { min-width: 0; }
   .budget-hero, .payments-panel, .approval-panel, .documents-panel, .tasks-panel, .calendar-panel, .shopping-panel, .meal-panel { grid-column: 1; }
   .budget-hero { padding: 16px; border-radius: 12px; }
-  .budget-overview { grid-template-columns: 1fr 1fr 72px; gap: 8px; }.budget-overview strong { font-size: 19px; }.progress-ring { width: 65px; height: 65px; }.progress-ring span { font-size: 17px; }
+  .budget-overview { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 72px; gap: 8px; }.budget-overview > div:not(.progress-ring) { min-width: 0; }.budget-overview strong { font-size: 19px; }.progress-ring { width: 65px; height: 65px; }.progress-ring span { font-size: 17px; }
   .account-row { grid-template-columns: repeat(3, 1fr); overflow-x: auto; }.account-row button { min-width: 105px; }.account-row strong { font-size: 12px; }
   .panel { padding: 14px; border-radius: 12px; }
   .approval-row { grid-template-columns: 27px 1fr auto; }
