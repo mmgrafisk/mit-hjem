@@ -7,6 +7,8 @@ const financePath = new URL("../app/finance-data.ts", import.meta.url);
 const appPath = new URL("../app/household-app.tsx", import.meta.url);
 const recurringMigrationPath = new URL("../supabase/migrations/20260901133016_add_recurring_finance_transactions.sql", import.meta.url);
 const recurringSeriesMigrationPath = new URL("../supabase/migrations/20260902052000_store_recurring_transactions_as_series.sql", import.meta.url);
+const occurrenceOverridesMigrationPath = new URL("../supabase/migrations/20260910033000_add_transaction_occurrence_overrides.sql", import.meta.url);
+const occurrenceOverrideIndexesMigrationPath = new URL("../supabase/migrations/20260910042500_index_transaction_occurrence_override_foreign_keys.sql", import.meta.url);
 
 test("budget mutations use restricted transactional database functions", async () => {
   const [migration, finance] = await Promise.all([readFile(migrationPath, "utf8"), readFile(financePath, "utf8")]);
@@ -60,6 +62,30 @@ test("recurring transactions are stored once, have an optional end date and are 
   assert.match(app, /Sidste betaling/);
   assert.match(app, /Betalingsplan/);
   assert.match(app, /Slet .* fra oversigten/);
+});
+
+test("transaction occurrence overrides are household-scoped and recurring splits stay atomic", async () => {
+  const [migration, indexMigration, finance, app] = await Promise.all([readFile(occurrenceOverridesMigrationPath, "utf8"), readFile(occurrenceOverrideIndexesMigrationPath, "utf8"), readFile(financePath, "utf8"), readFile(appPath, "utf8")]);
+  assert.match(migration, /create table public\.transaction_occurrence_overrides/);
+  assert.match(migration, /unique \(transaction_id, occurred_on\)/);
+  assert.match(migration, /transaction_occurrence_overrides_period_idx[\s\S]*household_id, occurred_on, transaction_id/);
+  assert.match(migration, /alter table public\.transaction_occurrence_overrides enable row level security/);
+  assert.match(migration, /private\.is_household_member\(household_id\)/);
+  assert.match(migration, /create or replace function public\.split_recurring_transaction/);
+  assert.match(migration, /recurrence_group_id = effective_group_id[\s\S]*effective_group_id,/);
+  assert.match(indexMigration, /transaction_id, household_id/);
+  assert.match(indexMigration, /created_by/);
+  assert.match(migration, /security invoker/g);
+  assert.match(migration, /revoke execute on function public\.split_recurring_transaction[\s\S]*from public, anon/);
+  assert.match(finance, /buildTransactionPeriodRows/);
+  assert.match(finance, /updateFinanceTransactionOccurrence/);
+  assert.match(finance, /\.rpc\("set_transaction_occurrence_override"/);
+  assert.match(finance, /\.rpc\("split_recurring_transaction"/);
+  assert.doesNotMatch(app, /Budgetvisning/);
+  assert.doesNotMatch(app, />Faktisk<|>Forskel</);
+  assert.match(app, /Alle tal kommer fra dine posteringer/);
+  assert.match(app, /Tilføj indtægt/);
+  assert.match(app, /Tilføj postering/);
 });
 
 test("finance categories and transaction history have stable routes", async () => {

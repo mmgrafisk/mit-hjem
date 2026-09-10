@@ -82,7 +82,7 @@ test("renders a visible configuration error instead of crashing", async () => {
   assert.match(html, /Konfigurationen til login mangler/);
 });
 
-test("persists selectable budget periods, repeat-forward plans and transactions", async () => {
+test("persists selectable periods and renders one transaction-based budget table", async () => {
   const [app, finance] = await Promise.all([
     readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/finance-data.ts", import.meta.url), "utf8"),
@@ -95,14 +95,16 @@ test("persists selectable budget periods, repeat-forward plans and transactions"
   assert.match(finance, /loadFinanceYear/);
   assert.match(finance, /budgetPeriodMonthKeys/);
   assert.match(finance, /loadFinancePeriod/);
-  assert.match(finance, /updatePeriodPlannedAmounts/);
-  assert.match(finance, /updatePeriodIncomeTargets/);
+  assert.match(finance, /buildTransactionPeriodRows/);
+  assert.match(finance, /updateFinanceTransactionOccurrence/);
   assert.match(finance, /"calendar" \| "rest-of-year" \| "rolling-12"/);
   assert.match(app, /TransactionModal/);
   assert.match(app, /FinanceOverviewView/);
   assert.match(app, /Overblik/);
   assert.match(app, /12 måneder frem/);
-  assert.match(app, /Fra \{pendingEdit\.monthLabel\} og frem/);
+  assert.match(app, /Fra \$\{pendingEdit\.monthLabel\} og frem/);
+  assert.match(app, /Alle tal kommer fra dine posteringer/);
+  assert.doesNotMatch(app, /Budgetvisning/);
   assert.match(app, /Budget · \{financePeriodLabel\(financePeriod\)\}/);
   assert.doesNotMatch(finance, /service[_-]?role|secret[_-]?key/i);
 });

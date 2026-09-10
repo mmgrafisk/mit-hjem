@@ -1,0 +1,5 @@
+create index transaction_occurrence_overrides_transaction_household_idx
+  on public.transaction_occurrence_overrides (transaction_id, household_id);
+
+create index transaction_occurrence_overrides_created_by_idx
+  on public.transaction_occurrence_overrides (created_by);

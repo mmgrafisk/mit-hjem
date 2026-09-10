@@ -53,6 +53,7 @@ export type NewTransaction = {
 };
 
 export type TransactionRecurrence = "once" | "monthly" | "every_2_months" | "quarterly" | "half_yearly";
+export type TransactionOccurrenceEditScope = "only" | "forward";
 
 export type FinanceYearCategory = {
   id: string;
@@ -83,6 +84,20 @@ export type FinancePeriodMonth = {
   monthIndex: number;
 };
 
+export type TransactionOccurrenceOverride = {
+  transactionId: string;
+  occurredOn: string;
+  amount: number | null;
+  isSkipped: boolean;
+};
+
+export type FinancePeriodTransactionRow = {
+  transaction: FinanceTransaction;
+  occurrenceTransactions: Array<FinanceTransaction | null>;
+  occurrenceDates: Array<string | null>;
+  values: number[];
+};
+
 export type FinancePeriodSnapshot = {
   mode: BudgetPeriodMode;
   selectedYear: number;
@@ -92,6 +107,10 @@ export type FinancePeriodSnapshot = {
   incomeActual: number[];
   expenseActual: number[];
   categories: FinanceYearCategory[];
+  transactionRows: FinancePeriodTransactionRow[];
+  incomeValues: number[];
+  expenseValues: number[];
+  availableValues: number[];
 };
 
 export const financeMonthNames = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"] as const;
@@ -168,6 +187,73 @@ function transactionDatesInRange(transaction: FinanceTransaction, fromDate: stri
     throughDate,
     endDate: transaction.recurrenceEndOn,
   });
+}
+
+function latestRecurringTransactionSegments(transactions: FinanceTransaction[]) {
+  const bySeries = new Map<string, FinanceTransaction>();
+  for (const transaction of transactions) {
+    const key = transaction.recurrenceGroupId ?? transaction.id;
+    const current = bySeries.get(key);
+    if (!current || transaction.occurredOn > current.occurredOn) bySeries.set(key, transaction);
+  }
+  return [...bySeries.values()].sort((left, right) => right.occurredOn.localeCompare(left.occurredOn));
+}
+
+function monthEndKey(monthKeyValue: string) {
+  const date = new Date(`${monthKeyValue}T12:00:00`);
+  date.setMonth(date.getMonth() + 1);
+  date.setDate(0);
+  return date.toISOString().slice(0, 10);
+}
+
+export function buildTransactionPeriodRows(
+  transactions: FinanceTransaction[],
+  overrides: TransactionOccurrenceOverride[],
+  months: FinancePeriodMonth[],
+): FinancePeriodTransactionRow[] {
+  const overrideByOccurrence = new Map(overrides.map((override) => [`${override.transactionId}:${override.occurredOn}`, override]));
+  const transactionGroups = new Map<string, FinanceTransaction[]>();
+  for (const transaction of transactions) {
+    const key = transaction.recurrenceGroupId ?? transaction.id;
+    transactionGroups.set(key, [...(transactionGroups.get(key) ?? []), transaction]);
+  }
+  return [...transactionGroups.values()]
+    .map((segments) => {
+      const orderedSegments = segments.toSorted((left, right) => left.occurredOn.localeCompare(right.occurredOn));
+      const occurrenceTransactions = months.map((month) => orderedSegments.findLast((segment) => transactionDatesInRange(segment, month.key, monthEndKey(month.key)).length > 0) ?? null);
+      const occurrenceDates = occurrenceTransactions.map((transaction, monthIndex) => transaction ? transactionDatesInRange(transaction, months[monthIndex].key, monthEndKey(months[monthIndex].key))[0] ?? null : null);
+      const values = occurrenceDates.map((occurredOn, monthIndex) => {
+        if (!occurredOn) return 0;
+        const transaction = occurrenceTransactions[monthIndex];
+        if (!transaction) return 0;
+        const override = overrideByOccurrence.get(`${transaction.id}:${occurredOn}`);
+        if (override?.isSkipped) return 0;
+        return override?.amount ?? transaction.amount;
+      });
+      return { transaction: orderedSegments.at(-1)!, occurrenceTransactions, occurrenceDates, values };
+    })
+    .filter((row) => row.occurrenceDates.some(Boolean))
+    .sort((left, right) => {
+      if (left.transaction.direction !== right.transaction.direction) return left.transaction.direction === "income" ? -1 : 1;
+      const categoryOrder = left.transaction.categoryName.localeCompare(right.transaction.categoryName, "da");
+      if (categoryOrder !== 0) return categoryOrder;
+      const merchantOrder = left.transaction.merchant.localeCompare(right.transaction.merchant, "da");
+      return merchantOrder !== 0 ? merchantOrder : left.transaction.occurredOn.localeCompare(right.transaction.occurredOn);
+    });
+}
+
+export function transactionPeriodTotals(rows: FinancePeriodTransactionRow[], monthCount: number) {
+  const incomeValues = Array(monthCount).fill(0) as number[];
+  const expenseValues = Array(monthCount).fill(0) as number[];
+  for (const row of rows) {
+    const target = row.transaction.direction === "income" ? incomeValues : expenseValues;
+    row.values.forEach((value, monthIndex) => { target[monthIndex] += value; });
+  }
+  return {
+    incomeValues,
+    expenseValues,
+    availableValues: incomeValues.map((income, monthIndex) => income - expenseValues[monthIndex]),
+  };
 }
 
 export function isValidFinanceAmount(value: number, allowZero = true) {
@@ -320,17 +406,19 @@ export async function loadFinance(householdId: string, userId: string): Promise<
   const supabase = getSupabaseBrowserClient();
   const { budget, categories } = await ensureCurrentBudget(householdId, userId);
   const endMonth = nextMonthKey(budget.month);
-  const [itemsResult, transactionsResult, documentLinksResult] = await Promise.all([
-    supabase.from("budget_items").select("id, category_id, planned_amount").eq("household_id", householdId).eq("budget_id", budget.id),
+  const throughDate = new Date(`${endMonth}T12:00:00`);
+  throughDate.setDate(throughDate.getDate() - 1);
+  const throughDateKey = throughDate.toISOString().slice(0, 10);
+  const [transactionsResult, documentLinksResult, overridesResult] = await Promise.all([
     supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id, recurrence_end_on").eq("household_id", householdId).lt("occurred_on", endMonth).in("status", ["approved", "scheduled"]).order("occurred_on", { ascending: false }).order("created_at", { ascending: false }),
     supabase.from("transaction_documents").select("transaction_id, document_id").eq("household_id", householdId),
+    supabase.from("transaction_occurrence_overrides").select("transaction_id, occurred_on, amount, is_skipped").eq("household_id", householdId).gte("occurred_on", budget.month).lte("occurred_on", throughDateKey),
   ]);
-  if (itemsResult.error) throw itemsResult.error;
   if (transactionsResult.error) throw transactionsResult.error;
   if (documentLinksResult.error) throw documentLinksResult.error;
+  if (overridesResult.error) throw overridesResult.error;
 
   const categoryById = new Map(categories.map((category) => [category.id, category]));
-  const itemsByCategory = new Map((itemsResult.data ?? []).map((item) => [item.category_id, item]));
   const documentIdsByTransaction = new Map<string, string[]>();
   for (const link of documentLinksResult.data ?? []) {
     documentIdsByTransaction.set(link.transaction_id, [...(documentIdsByTransaction.get(link.transaction_id) ?? []), link.document_id]);
@@ -349,43 +437,49 @@ export async function loadFinance(householdId: string, userId: string): Promise<
     recurrenceEndOn: transaction.recurrence_end_on,
     linkedDocumentIds: documentIdsByTransaction.get(transaction.id) ?? [],
   }));
+  const overrideByOccurrence = new Map((overridesResult.data ?? []).map((override) => [`${override.transaction_id}:${override.occurred_on}`, override]));
   const today = new Date().toISOString().slice(0, 10);
-  const throughDate = new Date(`${endMonth}T12:00:00`);
-  throughDate.setDate(throughDate.getDate() - 1);
-  const transactions = collapseRecurringTransactions(storedTransactions).flatMap((transaction) =>
-    transactionDatesInRange(transaction, budget.month, throughDate.toISOString().slice(0, 10)).map((occurredOn) => ({
-      ...transaction,
-      occurredOn,
-      status: transaction.recurrence === "once" ? transaction.status : occurredOn <= today ? "approved" as const : "scheduled" as const,
-    })),
+  const transactions = storedTransactions.flatMap((transaction) =>
+    transactionDatesInRange(transaction, budget.month, throughDateKey).flatMap((occurredOn) => {
+      const override = overrideByOccurrence.get(`${transaction.id}:${occurredOn}`);
+      if (override?.is_skipped) return [];
+      return [{
+        ...transaction,
+        amount: Number(override?.amount ?? transaction.amount),
+        occurredOn,
+        status: transaction.recurrence === "once" ? transaction.status : occurredOn <= today ? "approved" as const : "scheduled" as const,
+      }];
+    }),
   );
 
   const categorySpend = new Map<string, number>();
+  const categoryRegistered = new Map<string, number>();
   let uncategorizedSpend = 0;
+  let uncategorizedRegistered = 0;
   for (const transaction of transactions) {
-    if (transaction.status !== "approved") continue;
     if (transaction.direction !== "expense") continue;
     if (!transaction.categoryId) {
-      uncategorizedSpend += transaction.amount;
+      uncategorizedRegistered += transaction.amount;
+      if (transaction.status === "approved") uncategorizedSpend += transaction.amount;
       continue;
     }
-    categorySpend.set(transaction.categoryId, (categorySpend.get(transaction.categoryId) ?? 0) + transaction.amount);
+    categoryRegistered.set(transaction.categoryId, (categoryRegistered.get(transaction.categoryId) ?? 0) + transaction.amount);
+    if (transaction.status === "approved") categorySpend.set(transaction.categoryId, (categorySpend.get(transaction.categoryId) ?? 0) + transaction.amount);
   }
 
   const financeCategories: FinanceCategory[] = categories.map((category) => {
-    const item = itemsByCategory.get(category.id);
     return {
       id: category.id,
-      budgetItemId: item?.id ?? "",
+      budgetItemId: "",
       name: category.name,
       color: category.color ?? "#2158E8",
       categoryType: category.category_type as FinanceCategoryType,
       editable: true,
-      planned: Number(item?.planned_amount ?? 0),
+      planned: categoryRegistered.get(category.id) ?? 0,
       spent: categorySpend.get(category.id) ?? 0,
     };
   });
-  if (uncategorizedSpend > 0) {
+  if (uncategorizedRegistered > 0) {
     financeCategories.push({
       id: "uncategorized",
       budgetItemId: "",
@@ -393,16 +487,17 @@ export async function loadFinance(householdId: string, userId: string): Promise<
       color: "#6B7280",
       categoryType: "uncategorized",
       editable: false,
-      planned: 0,
+      planned: uncategorizedRegistered,
       spent: uncategorizedSpend,
     });
   }
-  const spendingTarget = financeCategories.reduce((sum, category) => sum + category.planned, 0) || Number(budget.spending_target);
+  const spendingTarget = transactions.filter((item) => item.direction === "expense").reduce((sum, item) => sum + item.amount, 0);
+  const incomeTarget = transactions.filter((item) => item.direction === "income").reduce((sum, item) => sum + item.amount, 0);
 
   return {
     budgetId: budget.id,
     month: budget.month,
-    incomeTarget: Number(budget.income_target),
+    incomeTarget,
     spendingTarget,
     spent: transactions.filter((item) => item.status === "approved" && item.direction === "expense").reduce((sum, item) => sum + item.amount, 0),
     income: transactions.filter((item) => item.status === "approved" && item.direction === "income").reduce((sum, item) => sum + item.amount, 0),
@@ -461,6 +556,54 @@ export async function updateFinanceTransaction(householdId: string, userId: stri
   await syncTransactionDocuments(householdId, userId, transactionId, transaction.linkedDocumentIds ?? []);
 }
 
+export async function updateFinanceTransactionOccurrence(
+  householdId: string,
+  userId: string,
+  transaction: FinanceTransaction,
+  occurredOn: string,
+  amount: number,
+  scope: TransactionOccurrenceEditScope,
+) {
+  if (!isValidFinanceAmount(amount)) throw new Error("Beløbet er ugyldigt.");
+  if (transaction.recurrence === "once") {
+    if (amount === 0) return deleteFinanceTransaction(householdId, transaction.id);
+    return updateFinanceTransaction(householdId, userId, transaction.id, {
+      merchant: transaction.merchant,
+      amount,
+      direction: transaction.direction,
+      occurredOn: transaction.occurredOn,
+      categoryId: transaction.categoryId,
+      recurrence: transaction.recurrence,
+      recurrenceEndOn: transaction.recurrenceEndOn,
+      recurrenceGroupId: transaction.recurrenceGroupId,
+      status: transaction.status,
+      linkedDocumentIds: transaction.linkedDocumentIds,
+    });
+  }
+
+  const supabase = getSupabaseBrowserClient();
+  if (scope === "only") {
+    const result = await supabase.rpc("set_transaction_occurrence_override", {
+      p_household_id: householdId,
+      p_transaction_id: transaction.id,
+      p_occurred_on: occurredOn,
+      p_amount: amount === 0 ? null : amount,
+      p_skip: amount === 0,
+    });
+    if (result.error) throw result.error;
+    return;
+  }
+
+  const result = await supabase.rpc("split_recurring_transaction", {
+    p_household_id: householdId,
+    p_transaction_id: transaction.id,
+    p_effective_on: occurredOn,
+    p_amount: amount === 0 ? null : amount,
+    p_stop: amount === 0,
+  });
+  if (result.error) throw result.error;
+}
+
 export async function deleteFinanceTransaction(householdId: string, transactionId: string) {
   const supabase = getSupabaseBrowserClient();
   const lookup = await supabase.from("transactions").select("recurrence_group_id").eq("id", transactionId).eq("household_id", householdId).single();
@@ -493,7 +636,7 @@ export async function loadFinanceTransactions(householdId: string, limit = 200):
   for (const link of documentLinksResult.data ?? []) {
     documentIdsByTransaction.set(link.transaction_id, [...(documentIdsByTransaction.get(link.transaction_id) ?? []), link.document_id]);
   }
-  return collapseRecurringTransactions((transactionsResult.data ?? []).map((transaction) => ({
+  return latestRecurringTransactionSegments((transactionsResult.data ?? []).map((transaction) => ({
     id: transaction.id,
     merchant: transaction.merchant,
     amount: Number(transaction.amount),
@@ -665,39 +808,84 @@ export async function loadFinanceYear(householdId: string, userId: string, year:
   };
 }
 
-export async function loadFinancePeriod(householdId: string, userId: string, mode: BudgetPeriodMode, selectedYear: number): Promise<FinancePeriodSnapshot> {
+export async function loadFinancePeriod(householdId: string, _userId: string, mode: BudgetPeriodMode, selectedYear: number): Promise<FinancePeriodSnapshot> {
   const monthKeys = budgetPeriodMonthKeys(mode, selectedYear);
-  const years = [...new Set(monthKeys.map((key) => Number(key.slice(0, 4))))];
-  const snapshots: FinanceYearSnapshot[] = [];
-  for (const year of years) {
-    snapshots.push(await loadFinanceYear(householdId, userId, year, monthKeys.filter((key) => Number(key.slice(0, 4)) === year)));
-  }
-  const snapshotByYear = new Map(snapshots.map((snapshot) => [snapshot.year, snapshot]));
   const months = monthKeys.map((key) => {
     const year = Number(key.slice(0, 4));
     const monthIndex = Number(key.slice(5, 7)) - 1;
     return { key, year, monthIndex, label: `${financeMonthNames[monthIndex]} ${String(year).slice(-2)}` };
   });
-  const categoryOrder = snapshots.flatMap((snapshot) => snapshot.categories).filter((category, index, categories) => categories.findIndex((candidate) => candidate.id === category.id) === index);
+  const throughDate = monthEndKey(monthKeys.at(-1) ?? monthKeys[0]);
+  const supabase = getSupabaseBrowserClient();
+  const [transactionsResult, categoriesResult, overridesResult, documentLinksResult] = await Promise.all([
+    supabase.from("transactions").select("id, merchant, amount, direction, occurred_on, category_id, status, recurrence_interval_months, recurrence_group_id, recurrence_end_on").eq("household_id", householdId).lte("occurred_on", throughDate).in("status", ["approved", "scheduled"]).order("occurred_on").order("created_at"),
+    supabase.from("budget_categories").select("id, name, color, category_type, sort_order").eq("household_id", householdId).is("archived_at", null).order("sort_order"),
+    supabase.from("transaction_occurrence_overrides").select("transaction_id, occurred_on, amount, is_skipped").eq("household_id", householdId).gte("occurred_on", monthKeys[0]).lte("occurred_on", throughDate),
+    supabase.from("transaction_documents").select("transaction_id, document_id").eq("household_id", householdId),
+  ]);
+  if (transactionsResult.error) throw transactionsResult.error;
+  if (categoriesResult.error) throw categoriesResult.error;
+  if (overridesResult.error) throw overridesResult.error;
+  if (documentLinksResult.error) throw documentLinksResult.error;
+
+  const categories = categoriesResult.data ?? [];
+  const categoryById = new Map(categories.map((category) => [category.id, category.name]));
+  const documentIdsByTransaction = new Map<string, string[]>();
+  for (const link of documentLinksResult.data ?? []) {
+    documentIdsByTransaction.set(link.transaction_id, [...(documentIdsByTransaction.get(link.transaction_id) ?? []), link.document_id]);
+  }
+  const transactions: FinanceTransaction[] = (transactionsResult.data ?? []).map((transaction) => ({
+    id: transaction.id,
+    merchant: transaction.merchant,
+    amount: Number(transaction.amount),
+    direction: transaction.direction as "expense" | "income",
+    occurredOn: transaction.occurred_on,
+    categoryId: transaction.category_id,
+    categoryName: transaction.category_id ? categoryById.get(transaction.category_id) ?? "Andet" : transaction.direction === "income" ? "Indtægt" : "Ikke kategoriseret",
+    status: transaction.status as "approved" | "scheduled",
+    recurrence: recurrenceFromInterval(transaction.recurrence_interval_months),
+    recurrenceGroupId: transaction.recurrence_group_id,
+    recurrenceEndOn: transaction.recurrence_end_on,
+    linkedDocumentIds: documentIdsByTransaction.get(transaction.id) ?? [],
+  }));
+  const overrides: TransactionOccurrenceOverride[] = (overridesResult.data ?? []).map((override) => ({
+    transactionId: override.transaction_id,
+    occurredOn: override.occurred_on,
+    amount: override.amount === null ? null : Number(override.amount),
+    isSkipped: override.is_skipped,
+  }));
+  const transactionRows = buildTransactionPeriodRows(transactions, overrides, months);
+  const totals = transactionPeriodTotals(transactionRows, months.length);
+  const uncategorizedRows = transactionRows.filter((row) => row.transaction.direction === "expense" && !row.transaction.categoryId);
+  const categoryOrder: FinanceYearCategory[] = categories.map((category) => {
+    const values = transactionPeriodTotals(transactionRows.filter((row) => row.transaction.categoryId === category.id), months.length).expenseValues;
+    return {
+      id: category.id,
+      name: category.name,
+      color: category.color ?? "#2158E8",
+      categoryType: category.category_type as FinanceCategoryType,
+      editable: true,
+      budgetItemIds: Array(months.length).fill(null),
+      planned: values,
+      actual: values,
+    };
+  });
+  if (uncategorizedRows.length) {
+    const values = transactionPeriodTotals(uncategorizedRows, months.length).expenseValues;
+    categoryOrder.push({ id: "uncategorized", name: "Ikke kategoriseret", color: "#6B7280", categoryType: "uncategorized", editable: false, budgetItemIds: Array(months.length).fill(null), planned: values, actual: values });
+  }
 
   return {
     mode,
     selectedYear,
     months,
-    budgetIds: months.map(({ year, monthIndex }) => snapshotByYear.get(year)?.budgetIds[monthIndex] ?? ""),
-    incomePlanned: months.map(({ year, monthIndex }) => snapshotByYear.get(year)?.incomePlanned[monthIndex] ?? 0),
-    incomeActual: months.map(({ year, monthIndex }) => snapshotByYear.get(year)?.incomeActual[monthIndex] ?? 0),
-    expenseActual: months.map(({ year, monthIndex }) => snapshotByYear.get(year)?.expenseActual[monthIndex] ?? 0),
-    categories: categoryOrder.map((category) => ({
-      id: category.id,
-      name: category.name,
-      color: category.color,
-      categoryType: category.categoryType,
-      editable: category.editable,
-      budgetItemIds: months.map(({ year, monthIndex }) => snapshotByYear.get(year)?.categories.find((candidate) => candidate.id === category.id)?.budgetItemIds[monthIndex] ?? null),
-      planned: months.map(({ year, monthIndex }) => snapshotByYear.get(year)?.categories.find((candidate) => candidate.id === category.id)?.planned[monthIndex] ?? 0),
-      actual: months.map(({ year, monthIndex }) => snapshotByYear.get(year)?.categories.find((candidate) => candidate.id === category.id)?.actual[monthIndex] ?? 0),
-    })),
+    budgetIds: Array(months.length).fill(""),
+    incomePlanned: totals.incomeValues,
+    incomeActual: totals.incomeValues,
+    expenseActual: totals.expenseValues,
+    categories: categoryOrder,
+    transactionRows,
+    ...totals,
   };
 }
 

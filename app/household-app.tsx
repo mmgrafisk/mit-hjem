@@ -20,7 +20,6 @@ import {
   Monitor,
   Moon,
   Palette,
-  Pencil,
   Plus,
   Search,
   Settings,
@@ -59,8 +58,7 @@ import {
 import {
   addFinanceCategory,
   addFinanceTransaction,
-  budgetEditMonthIndexes,
-  budgetCategorySummaryTotals,
+  buildTransactionPeriodRows,
   budgetPeriodMonthKeys,
   budgetPeriodTotalLabel,
   deleteFinanceTransaction,
@@ -71,20 +69,20 @@ import {
   loadFinancePeriod,
   loadFinanceTransactions,
   recurringTransactionDates,
-  shouldPromptForBudgetEdit,
   transactionDateLabel,
+  transactionPeriodTotals,
   transactionRecurrenceLabel,
   updateFinanceTransaction,
-  updatePeriodIncomeTargets,
-  updatePeriodPlannedAmounts,
-  updatePlannedAmount,
+  updateFinanceTransactionOccurrence,
   type BudgetPeriodMode,
   type FinancePeriodSnapshot,
   type FinanceSnapshot,
   type FinanceTransaction,
+  type FinancePeriodTransactionRow,
   type FinanceCategoryType,
   type NewTransaction,
   type TransactionRecurrence,
+  type TransactionOccurrenceEditScope,
 } from "./finance-data";
 import {
   addSubscription,
@@ -178,13 +176,6 @@ const demoSubscriptions: Subscription[] = [
 ];
 
 function createDemoPeriodFinance(mode: BudgetPeriodMode, selectedYear: number): FinancePeriodSnapshot {
-  const plannedByCategory: Record<string, number> = {
-    Bolig: 9000,
-    "Mad & husholdning": 7000,
-    Transport: 3500,
-    Forsikring: 1500,
-    Fritid: 2000,
-  };
   const now = new Date();
   const months = budgetPeriodMonthKeys(mode, selectedYear, now).map((key) => {
     const year = Number(key.slice(0, 4));
@@ -192,15 +183,16 @@ function createDemoPeriodFinance(mode: BudgetPeriodMode, selectedYear: number): 
     const monthName = new Intl.DateTimeFormat("da-DK", { month: "short" }).format(new Date(year, monthIndex, 1)).replace(".", "");
     return { key, year, monthIndex, label: `${monthName.charAt(0).toUpperCase()}${monthName.slice(1)} ${String(year).slice(-2)}` };
   });
-  const hasActual = (year: number, monthIndex: number) => year < now.getFullYear() || (year === now.getFullYear() && monthIndex <= now.getMonth());
+  const transactionRows = buildTransactionPeriodRows(demoFinance.transactions, [], months);
+  const totals = transactionPeriodTotals(transactionRows, months.length);
   return {
     mode,
     selectedYear,
     months,
     budgetIds: months.map((month) => `demo-budget-${month.year}-${month.monthIndex}`),
-    incomePlanned: months.map(() => 32000),
-    incomeActual: months.map((month) => hasActual(month.year, month.monthIndex) ? 32000 : 0),
-    expenseActual: months.map((month) => hasActual(month.year, month.monthIndex) ? 14562 : 0),
+    incomePlanned: totals.incomeValues,
+    incomeActual: totals.incomeValues,
+    expenseActual: totals.expenseValues,
     categories: demoFinance.categories.map((category) => ({
       id: category.id,
       name: category.name,
@@ -208,9 +200,11 @@ function createDemoPeriodFinance(mode: BudgetPeriodMode, selectedYear: number): 
       categoryType: category.categoryType,
       editable: category.editable,
       budgetItemIds: months.map((month) => `${category.budgetItemId}-${month.year}-${month.monthIndex}`),
-      planned: months.map(() => plannedByCategory[category.name] ?? category.planned),
-      actual: months.map((month) => hasActual(month.year, month.monthIndex) ? category.spent : 0),
+      planned: transactionPeriodTotals(transactionRows.filter((row) => row.transaction.categoryId === category.id), months.length).expenseValues,
+      actual: transactionPeriodTotals(transactionRows.filter((row) => row.transaction.categoryId === category.id), months.length).expenseValues,
     })),
+    transactionRows,
+    ...totals,
   };
 }
 
@@ -269,8 +263,8 @@ function CheckRow({
 }
 
 function BudgetHero({ finance, onOpen }: { finance: FinanceSnapshot; onOpen: () => void }) {
-  const remaining = finance.spendingTarget - finance.spent;
-  const percent = finance.spendingTarget > 0 ? Math.min(100, Math.round((finance.spent / finance.spendingTarget) * 100)) : 0;
+  const remaining = finance.incomeTarget - finance.spendingTarget;
+  const percent = finance.incomeTarget > 0 ? Math.min(100, Math.round((finance.spendingTarget / finance.incomeTarget) * 100)) : 0;
   return (
     <section className="budget-hero">
       <div className="budget-heading">
@@ -280,26 +274,26 @@ function BudgetHero({ finance, onOpen }: { finance: FinanceSnapshot; onOpen: () 
       </div>
       <div className="budget-overview">
         <div>
-          <small>Forbrug</small>
-          <strong>{currency.format(finance.spent)}</strong>
-          <span>af {currency.format(finance.spendingTarget)}</span>
+          <small>Registrerede udgifter</small>
+          <strong>{currency.format(finance.spendingTarget)}</strong>
+          <span>{currency.format(finance.spent)} bogført</span>
         </div>
         <div>
-          <small>Tilbage at bruge</small>
+          <small>Til rådighed</small>
           <strong>{currency.format(remaining)}</strong>
-          <span>{Math.max(0, 100 - percent)}% tilbage</span>
+          <span>Indtægter minus udgifter</span>
         </div>
-        <div className="progress-ring" aria-label={`${percent} procent af budgettet er brugt`} style={{ background: `radial-gradient(circle, var(--primary) 55%, transparent 57%), conic-gradient(var(--mint) 0 ${percent}%, rgba(255,255,255,.35) ${percent}% 100%)` }}>
+        <div className="progress-ring" aria-label={`${percent} procent af indtægterne er fordelt`} style={{ background: `radial-gradient(circle, var(--primary) 55%, transparent 57%), conic-gradient(var(--mint) 0 ${percent}%, rgba(255,255,255,.35) ${percent}% 100%)` }}>
           <span>{percent}%</span>
         </div>
       </div>
       <div className="budget-bar"><span style={{ width: `${percent}%` }} /></div>
       <div className="account-row">
         <button type="button" onClick={onOpen}>
-          <small>Indtægter</small><strong>{currency.format(finance.income)}</strong><span>Månedens registrerede</span>
+          <small>Indtægter</small><strong>{currency.format(finance.incomeTarget)}</strong><span>{currency.format(finance.income)} bogført</span>
         </button>
         <button type="button" onClick={onOpen}>
-          <small>Budget</small><strong>{currency.format(finance.spendingTarget)}</strong><span>Fordelt på kategorier</span>
+          <small>Udgifter</small><strong>{currency.format(finance.spendingTarget)}</strong><span>Alle posteringer denne måned</span>
         </button>
         <button type="button" onClick={onOpen}>
           <small>Posteringer</small><strong>{finance.transactions.length}</strong><span>Denne måned</span>
@@ -434,9 +428,7 @@ function Overview({
   );
 }
 
-type BudgetMode = "budget" | "actual" | "difference";
-
-const budgetNumber = new Intl.NumberFormat("da-DK", { maximumFractionDigits: 0 });
+const budgetNumber = new Intl.NumberFormat("da-DK", { maximumFractionDigits: 2 });
 
 function sumValues(values: number[]) {
   return values.reduce((sum, value) => sum + value, 0);
@@ -451,7 +443,6 @@ function FinanceOverviewView({
   onOpenCategory,
   onOpenTransactions,
   onEditTransaction,
-  onPlannedChange,
 }: {
   finance: FinanceSnapshot;
   onOpenBudget: () => void;
@@ -461,13 +452,12 @@ function FinanceOverviewView({
   onOpenCategory: (categoryId: string) => void;
   onOpenTransactions: () => void;
   onEditTransaction: (transaction: FinanceTransaction) => void;
-  onPlannedChange: (categoryId: string, planned: number) => void | Promise<void>;
 }) {
   return (
     <div className="module-layout finance-overview">
       <BudgetHero finance={finance} onOpen={onOpenBudget} />
       <Panel>
-        <SectionTitle title="Budget pr. kategori" action="Ny kategori" onAction={onAddCategory} />
+        <SectionTitle title="Posteringer pr. kategori denne måned" action="Ny kategori" onAction={onAddCategory} />
         <div className="category-table">
           {finance.categories.map((category) => {
             const percent = category.planned > 0 ? Math.min(100, Math.round((category.spent / category.planned) * 100)) : 0;
@@ -476,22 +466,7 @@ function FinanceOverviewView({
                 <button className="category-name-button" onClick={() => onOpenCategory(category.id)} type="button"><strong><i className="category-color" style={{ background: category.color }} />{category.name}</strong><ChevronRight size={15} /></button>
                 <span className="category-progress"><i style={{ width: `${percent}%`, background: category.color }} /></span>
                 <span>{currency.format(category.spent)}</span>
-                {category.editable ? <label className="budget-amount-field">
-                  <span className="sr-only">Budget for {category.name}</span>
-                  <input
-                    aria-label={`Budget for ${category.name}`}
-                    defaultValue={category.planned}
-                    key={`${category.id}-${category.planned}`}
-                    min="0"
-                    onBlur={(event) => {
-                      const next = Number(event.target.value);
-                      if (isValidFinanceAmount(next) && next !== category.planned) void onPlannedChange(category.id, next);
-                    }}
-                    step="0.01"
-                    type="number"
-                  />
-                  kr.
-                </label> : <span className="budget-amount-field">Kræver kategori</span>}
+                <span className="budget-amount-field">{currency.format(category.planned)} registreret</span>
                 {category.editable ? <button aria-label={`Ny postering i ${category.name}`} className="category-posting-button" onClick={() => onAddTransactionForCategory(category.id)} type="button"><Plus size={14} />Postering</button> : null}
               </div>
             );
@@ -558,26 +533,25 @@ function TransactionsView({ transactions, categories, onAdd, onEdit, onDelete }:
   );
 }
 
-function CategoryDetailView({ category, transactions, onBack, onAddTransaction, onEditTransaction, onPlannedChange }: { category: FinanceSnapshot["categories"][number]; transactions: FinanceTransaction[]; onBack: () => void; onAddTransaction: () => void; onEditTransaction: (transaction: FinanceTransaction) => void; onPlannedChange: (categoryId: string, planned: number) => void | Promise<void> }) {
+function CategoryDetailView({ category, transactions, onBack, onAddTransaction, onEditTransaction }: { category: FinanceSnapshot["categories"][number]; transactions: FinanceTransaction[]; onBack: () => void; onAddTransaction: () => void; onEditTransaction: (transaction: FinanceTransaction) => void }) {
   const categoryTransactions = transactions.filter((transaction) => transaction.categoryId === category.id);
   const actual = category.spent;
   return (
     <div className="finance-page category-detail-page">
-      <header className="compact-page-header"><div><button className="back-button" onClick={onBack} type="button"><ArrowLeft size={16} />Økonomi</button><p>Budget, forbrug og alle posteringer for kategorien.</p></div><button className="primary-button" onClick={onAddTransaction} type="button"><Plus size={17} />Ny postering</button></header>
+      <header className="compact-page-header"><div><button className="back-button" onClick={onBack} type="button"><ArrowLeft size={16} />Økonomi</button><p>Registrerede, bogførte og kommende posteringer for kategorien.</p></div><button className="primary-button" onClick={onAddTransaction} type="button"><Plus size={17} />Ny postering</button></header>
       <section className="category-detail-summary">
-        <Panel><small>Månedsbudget</small><label className="category-budget-editor"><Pencil size={15} /><input aria-label={`Månedsbudget for ${category.name}`} defaultValue={category.planned} key={`${category.id}-${category.planned}`} min="0" onBlur={(event) => { const next = Number(event.target.value); if (isValidFinanceAmount(next) && next !== category.planned) void onPlannedChange(category.id, next); }} step="0.01" type="number" /><span>kr.</span></label></Panel>
+        <Panel><small>Registreret</small><strong>{currency.format(category.planned)}</strong><span>Denne måned</span></Panel>
         <Panel><small>Bogført</small><strong>{currency.format(actual)}</strong><span>Denne måned</span></Panel>
-        <Panel><small>Tilbage</small><strong className={category.planned - actual < 0 ? "negative" : "positive"}>{currency.format(category.planned - actual)}</strong><span>Af månedsbudgettet</span></Panel>
+        <Panel><small>Kommende</small><strong>{currency.format(Math.max(0, category.planned - actual))}</strong><span>Planlagte betalinger</span></Panel>
       </section>
       <Panel className="wide-panel"><SectionTitle title="Posteringer i kategorien" action="Ny postering" onAction={onAddTransaction} /><TransactionList onEdit={onEditTransaction} transactions={categoryTransactions} /></Panel>
     </div>
   );
 }
 
-type PendingBudgetEdit = {
-  kind: "income" | "category";
-  categoryId?: string;
-  monthIndex: number;
+type PendingOccurrenceEdit = {
+  row: FinancePeriodTransactionRow;
+  occurredOn: string;
   monthLabel: string;
   value: number;
 };
@@ -590,9 +564,9 @@ function BudgetView({
   onYearChange,
   onAddTransaction,
   onAddCategory,
+  onEditTransaction,
   onOpenCategory,
-  onPlannedChange,
-  onIncomeChange,
+  onOccurrenceChange,
   onExport,
 }: {
   financePeriod: FinancePeriodSnapshot;
@@ -600,93 +574,102 @@ function BudgetView({
   selectedYear: number;
   onPeriodModeChange: (mode: BudgetPeriodMode) => void;
   onYearChange: (year: number) => void;
-  onAddTransaction: () => void;
+  onAddTransaction: (direction: "expense" | "income", categoryId?: string | null) => void;
   onAddCategory: (name: string, categoryType: Exclude<FinanceCategoryType, "uncategorized">) => Promise<boolean>;
+  onEditTransaction: (transaction: FinanceTransaction) => void;
   onOpenCategory: (categoryId: string) => void;
-  onPlannedChange: (categoryId: string, monthIndexes: number[], planned: number) => void | Promise<void>;
-  onIncomeChange: (monthIndexes: number[], planned: number) => void | Promise<void>;
+  onOccurrenceChange: (transaction: FinanceTransaction, occurredOn: string, amount: number, scope: TransactionOccurrenceEditScope) => Promise<boolean>;
   onExport: () => void;
 }) {
-  const [mode, setMode] = useState<BudgetMode>("budget");
   const [categoryOpen, setCategoryOpen] = useState(false);
-  const [pendingEdit, setPendingEdit] = useState<PendingBudgetEdit | null>(null);
+  const [pendingEdit, setPendingEdit] = useState<PendingOccurrenceEdit | null>(null);
   const [editRevision, setEditRevision] = useState(0);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const monthCount = Math.max(1, financePeriod.months.length);
-  const plannedExpenses = financePeriod.months.map((_, monthIndex) => financePeriod.categories.reduce((sum, category) => sum + category.planned[monthIndex], 0));
-  const categoryValues = (planned: number[], actual: number[]) => mode === "budget" ? planned : mode === "actual" ? actual : planned.map((value, monthIndex) => value - actual[monthIndex]);
-  const incomeValues = mode === "budget" ? financePeriod.incomePlanned : mode === "actual" ? financePeriod.incomeActual : financePeriod.incomeActual.map((value, monthIndex) => value - financePeriod.incomePlanned[monthIndex]);
-  const expenseValues = mode === "budget" ? plannedExpenses : mode === "actual" ? financePeriod.expenseActual : plannedExpenses.map((value, monthIndex) => value - financePeriod.expenseActual[monthIndex]);
-  const availableValues = mode === "difference"
-    ? financePeriod.incomeActual.map((income, monthIndex) => (income - financePeriod.expenseActual[monthIndex]) - (financePeriod.incomePlanned[monthIndex] - plannedExpenses[monthIndex]))
-    : incomeValues.map((income, monthIndex) => income - expenseValues[monthIndex]);
-  const categorySummary = budgetCategorySummaryTotals(financePeriod.categories.map((category) => ({ categoryType: category.categoryType, values: categoryValues(category.planned, category.actual) })));
-  const fixedTotal = categorySummary.fixed;
-  const variableTotal = categorySummary.variable;
+  const incomeRows = financePeriod.transactionRows.filter((row) => row.transaction.direction === "income");
+  const expenseGroups = financePeriod.categories.map((category) => ({
+    category,
+    rows: financePeriod.transactionRows.filter((row) => row.transaction.direction === "expense" && (category.id === "uncategorized" ? !row.transaction.categoryId : row.transaction.categoryId === category.id)),
+  }));
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 5 }, (_, index) => currentYear - 2 + index);
+  const valuesForRows = (rows: FinancePeriodTransactionRow[]) => financePeriod.months.map((_, monthIndex) => rows.reduce((sum, row) => sum + row.values[monthIndex], 0));
 
-  const cancelEdit = () => { setPendingEdit(null); setEditRevision((revision) => revision + 1); };
-  const saveEdit = async (edit: PendingBudgetEdit, forward: boolean) => {
-    const monthIndexes = budgetEditMonthIndexes(financePeriod.months.length, edit.monthIndex, forward);
+  const cancelEdit = () => { setPendingEdit(null); setEditError(null); setEditRevision((revision) => revision + 1); };
+  const saveEdit = async (edit: PendingOccurrenceEdit, scope: TransactionOccurrenceEditScope) => {
     setSavingEdit(true);
+    setEditError(null);
     try {
-      if (edit.kind === "income") await onIncomeChange(monthIndexes, edit.value);
-      else if (edit.categoryId) await onPlannedChange(edit.categoryId, monthIndexes, edit.value);
-      setPendingEdit(null);
+      const saved = await onOccurrenceChange(edit.row.transaction, edit.occurredOn, edit.value, scope);
+      if (saved) setPendingEdit(null);
+      else setEditError("Ændringen kunne ikke gemmes. Prøv igen.");
     } finally {
       setSavingEdit(false);
       setEditRevision((revision) => revision + 1);
     }
   };
-  const askHowToApply = (edit: PendingBudgetEdit) => {
-    if (shouldPromptForBudgetEdit(edit.monthIndex, financePeriod.months.length)) setPendingEdit(edit);
-    else void saveEdit(edit, false);
+  const askHowToApply = (edit: PendingOccurrenceEdit) => {
+    if (edit.row.transaction.recurrence !== "once" || edit.value === 0) setPendingEdit(edit);
+    else void saveEdit(edit, "only");
   };
-  const applyEdit = async (forward: boolean) => {
-    if (pendingEdit) await saveEdit(pendingEdit, forward);
+  const applyEdit = async (scope: TransactionOccurrenceEditScope) => {
+    if (pendingEdit) await saveEdit(pendingEdit, scope);
   };
 
-  const renderValue = (value: number, label: string, edit?: Omit<PendingBudgetEdit, "value">) => mode === "budget" && edit ? (
+  const renderValue = (row: FinancePeriodTransactionRow, monthIndex: number) => {
+    const occurredOn = row.occurrenceDates[monthIndex];
+    const occurrenceTransaction = row.occurrenceTransactions[monthIndex];
+    const value = row.values[monthIndex];
+    if (!occurredOn || !occurrenceTransaction) return <span className="budget-empty-cell">—</span>;
+    return (
     <input
-      aria-label={label}
+      aria-label={`${row.transaction.merchant} ${financePeriod.months[monthIndex].label}`}
       defaultValue={value}
-      key={`${editRevision}-${financePeriod.months[edit.monthIndex]?.key}-${label}-${value}`}
+      key={`${editRevision}-${row.transaction.id}-${occurredOn}-${value}`}
       min="0"
       onBlur={(event) => {
         const next = Number(event.target.value);
-        if (isValidFinanceAmount(next) && next !== value) askHowToApply({ ...edit, value: next });
+        if (isValidFinanceAmount(next) && next !== value) askHowToApply({ row: { ...row, transaction: occurrenceTransaction }, occurredOn, monthLabel: financePeriod.months[monthIndex].label, value: next });
+        else if (!isValidFinanceAmount(next)) setEditRevision((revision) => revision + 1);
       }}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditRevision((revision) => revision + 1); }}
       step="0.01"
       type="number"
     />
-  ) : <span className={mode === "difference" ? value < 0 ? "negative" : value > 0 ? "positive" : "" : ""}>{budgetNumber.format(Math.round(value))}</span>;
+    );
+  };
+
+  const transactionRow = (row: FinancePeriodTransactionRow) => (
+    <tr className="budget-entry-row budget-transaction-row" key={row.transaction.id}>
+      <th><button className="budget-transaction-link" onClick={() => onEditTransaction(row.transaction)} type="button"><strong>{row.transaction.merchant}</strong><small>{transactionRecurrenceLabel(row.transaction.recurrence)}</small></button></th>
+      {financePeriod.months.map((month, monthIndex) => <td key={month.key}>{renderValue(row, monthIndex)}</td>)}
+      <td>{budgetNumber.format(sumValues(row.values))}</td>
+    </tr>
+  );
 
   return (
     <div className="finance-page">
       <header className="finance-workspace-header">
-        <div className="finance-workspace-copy"><p>Redigér direkte i tabellen · alle beløb gemmes automatisk.</p></div>
+        <div className="finance-workspace-copy"><p>Alle tal kommer fra dine posteringer. Ret et beløb direkte i den måned, hvor det forfalder.</p></div>
         <div className="finance-workspace-tools">
           <div className="budget-period-controls">
             <label><CalendarDays size={17} /><span className="sr-only">Vælg periode</span><select aria-label="Vælg budgetperiode" onChange={(event) => onPeriodModeChange(event.target.value as BudgetPeriodMode)} value={periodMode}><option value="calendar">Kalenderår</option><option value="rest-of-year">Resten af året</option><option value="rolling-12">12 måneder frem</option></select></label>
             {periodMode === "calendar" ? <label className="budget-year-select"><span className="sr-only">Vælg år</span><select aria-label="Vælg budgetår" onChange={(event) => onYearChange(Number(event.target.value))} value={selectedYear}>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label> : null}
           </div>
-          <div className="budget-mode-switch" role="group" aria-label="Budgetvisning">
-            {(["budget", "actual", "difference"] as const).map((value) => <button aria-pressed={mode === value} className={mode === value ? "active" : ""} key={value} onClick={() => setMode(value)} type="button">{{ budget: "Budget", actual: "Faktisk", difference: "Forskel" }[value]}</button>)}
-          </div>
           <div className="finance-header-actions">
-            <button className="secondary-button" onClick={onAddTransaction} type="button"><CircleDollarSign size={16} />Ny postering</button>
+            <button className="secondary-button" onClick={() => onAddTransaction("expense")} type="button"><CircleDollarSign size={16} />Ny postering</button>
             <button className="primary-button" onClick={() => setCategoryOpen(true)} type="button"><Plus size={16} />Kategori</button>
             <button aria-label="Eksportér budget som PDF" className="secondary-button compact-icon-button" onClick={onExport} title="Eksportér PDF" type="button"><Download size={17} /><span>PDF</span></button>
           </div>
         </div>
       </header>
 
-      <section className="budget-summary" aria-label="Budgetoversigt for valgt periode">
-        <div><small>Indtægter</small><strong className="positive">{currency.format(sumValues(incomeValues))}</strong><span>{currency.format(sumValues(incomeValues) / monthCount)} pr. md.</span></div>
-        <div><small>Faste poster</small><strong>{currency.format(fixedTotal)}</strong><span>{currency.format(fixedTotal / monthCount)} pr. md.</span></div>
-        <div><small>Variable udgifter</small><strong>{currency.format(variableTotal)}</strong><span>{currency.format(variableTotal / monthCount)} pr. md.</span></div>
-        <div><small>Til rådighed</small><strong className={sumValues(availableValues) < 0 ? "negative" : "positive"}>{currency.format(sumValues(availableValues))}</strong><span>{currency.format(sumValues(availableValues) / monthCount)} pr. md.</span></div>
+      <section className="budget-summary budget-summary-three" aria-label="Budgetoversigt for valgt periode">
+        <div><small>Indtægter</small><strong className="positive">{currency.format(sumValues(financePeriod.incomeValues))}</strong><span>{currency.format(sumValues(financePeriod.incomeValues) / monthCount)} pr. md.</span></div>
+        <div><small>Udgifter</small><strong>{currency.format(sumValues(financePeriod.expenseValues))}</strong><span>{currency.format(sumValues(financePeriod.expenseValues) / monthCount)} pr. md.</span></div>
+        <div><small>Til rådighed</small><strong className={sumValues(financePeriod.availableValues) < 0 ? "negative" : "positive"}>{currency.format(sumValues(financePeriod.availableValues))}</strong><span>{currency.format(sumValues(financePeriod.availableValues) / monthCount)} pr. md.</span></div>
       </section>
 
       <section className="budget-table-panel">
@@ -694,19 +677,24 @@ function BudgetView({
           <table className="budget-sheet" style={{ minWidth: Math.max(860, 210 + (financePeriod.months.length + 1) * 96) }}>
             <thead><tr><th>Kategori / post</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead>
             <tbody>
-              <tr className="budget-group-row"><th>Indtægter</th>{incomeValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(incomeValues)))}</td></tr>
-              <tr className="budget-entry-row"><th><span className="budget-row-marker income" />Forventet indtægt</th>{financePeriod.incomePlanned.map((planned, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{renderValue(mode === "budget" ? planned : incomeValues[monthIndex], `Indtægt ${financePeriod.months[monthIndex].label}`, { kind: "income", monthIndex, monthLabel: financePeriod.months[monthIndex].label })}</td>)}<td>{budgetNumber.format(Math.round(sumValues(incomeValues)))}</td></tr>
-              <tr className="budget-group-row expense"><th>Udgifter</th>{expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(expenseValues)))}</td></tr>
-              {financePeriod.categories.map((category) => {
-                const values = categoryValues(category.planned, category.actual);
-                return <tr className="budget-entry-row" key={category.id}><th><button className="budget-category-link" onClick={() => onOpenCategory(category.id)} type="button"><span className="budget-row-marker" style={{ background: category.color }} />{category.name}<ChevronRight size={14} /></button></th>{values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{renderValue(value, `${category.name} ${financePeriod.months[monthIndex].label}`, category.editable ? { kind: "category", categoryId: category.id, monthIndex, monthLabel: financePeriod.months[monthIndex].label } : undefined)}</td>)}<td className={mode === "difference" ? sumValues(values) < 0 ? "negative" : "positive" : ""}>{budgetNumber.format(Math.round(sumValues(values)))}</td></tr>;
+              <tr className="budget-group-row"><th>Indtægter</th>{financePeriod.incomeValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.incomeValues))}</td></tr>
+              {incomeRows.map(transactionRow)}
+              <tr className="budget-add-row"><th><button onClick={() => onAddTransaction("income")} type="button"><Plus size={14} />Tilføj indtægt</button></th><td colSpan={financePeriod.months.length + 1} /></tr>
+              <tr className="budget-group-row expense"><th>Udgifter</th>{financePeriod.expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.expenseValues))}</td></tr>
+              {expenseGroups.flatMap(({ category, rows }) => {
+                const values = valuesForRows(rows);
+                return [
+                  <tr className="budget-category-group-row" key={`${category.id}-group`}><th>{category.editable ? <button className="budget-category-link" onClick={() => onOpenCategory(category.id)} type="button"><span className="budget-row-marker" style={{ background: category.color }} />{category.name}<ChevronRight size={14} /></button> : <span><span className="budget-row-marker" style={{ background: category.color }} />{category.name}</span>}</th>{values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(values))}</td></tr>,
+                  ...rows.map(transactionRow),
+                  category.editable ? <tr className="budget-add-row" key={`${category.id}-add`}><th><button onClick={() => onAddTransaction("expense", category.id)} type="button"><Plus size={14} />Tilføj postering</button></th><td colSpan={financePeriod.months.length + 1} /></tr> : null,
+                ].filter(Boolean);
               })}
-              <tr className="budget-total-row"><th>Udgifter i alt</th>{expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td>{budgetNumber.format(Math.round(sumValues(expenseValues)))}</td></tr>
-              <tr className="budget-available-row"><th>Til rådighed</th>{availableValues.map((value, monthIndex) => <td className={value < 0 ? "negative" : "positive"} key={financePeriod.months[monthIndex].key}>{budgetNumber.format(Math.round(value))}</td>)}<td className={sumValues(availableValues) < 0 ? "negative" : "positive"}>{budgetNumber.format(Math.round(sumValues(availableValues)))}</td></tr>
+              <tr className="budget-total-row"><th>Udgifter i alt</th>{financePeriod.expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.expenseValues))}</td></tr>
+              <tr className="budget-available-row"><th>Til rådighed</th>{financePeriod.availableValues.map((value, monthIndex) => <td className={value < 0 ? "negative" : "positive"} key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td className={sumValues(financePeriod.availableValues) < 0 ? "negative" : "positive"}>{budgetNumber.format(sumValues(financePeriod.availableValues))}</td></tr>
             </tbody>
           </table>
         </div>
-        <footer><span>{financePeriodLabel(financePeriod)} · Beløb er i DKK.</span><span>Budget gemmes automatisk, når du har valgt, hvordan ændringen skal gælde.</span></footer>
+        <footer><span>{financePeriodLabel(financePeriod)} · Beløb er i DKK.</span><span>Gentagne posteringer vises automatisk i de måneder, hvor de forfalder.</span></footer>
       </section>
 
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = await onAddCategory(name, categoryType); if (saved) setCategoryOpen(false); return saved; }} /> : null}
@@ -714,12 +702,14 @@ function BudgetView({
         <div className="modal-backdrop" role="presentation" onMouseDown={savingEdit ? undefined : cancelEdit}>
           <section aria-labelledby="repeat-budget-title" aria-modal="true" className="quick-modal repeat-budget-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog">
             <button aria-label="Luk" className="modal-close" disabled={savingEdit} onClick={cancelEdit} type="button"><X size={18} /></button>
-            <div><small className="eyebrow">Gentag ændring</small><h2 id="repeat-budget-title">Hvordan skal beløbet gælde?</h2><p className="modal-intro">Skal {currency.format(pendingEdit.value)} kun gælde {pendingEdit.monthLabel}, eller også alle følgende måneder i den viste periode?</p></div>
+            <div><small className="eyebrow">{pendingEdit.value === 0 ? "Fjern betaling" : "Gentag ændring"}</small><h2 id="repeat-budget-title">{pendingEdit.value === 0 ? "Hvordan skal betalingen fjernes?" : "Hvordan skal beløbet gælde?"}</h2><p className="modal-intro">{pendingEdit.row.transaction.recurrence === "once" ? `Fjern “${pendingEdit.row.transaction.merchant}” fra ${pendingEdit.monthLabel}?` : pendingEdit.value === 0 ? `Skal betalingen springes over i ${pendingEdit.monthLabel}, eller skal serien stoppe fra denne måned?` : `Skal ${currency.format(pendingEdit.value)} kun gælde ${pendingEdit.monthLabel}, eller også alle følgende betalinger?`}</p></div>
             <div className="repeat-budget-actions">
-              <button className="secondary-button" disabled={savingEdit} onClick={() => void applyEdit(false)} type="button">Kun {pendingEdit.monthLabel}</button>
-              <button className="primary-button" disabled={savingEdit} onClick={() => void applyEdit(true)} type="button">Fra {pendingEdit.monthLabel} og frem</button>
+              <button className="secondary-button" disabled={savingEdit} onClick={cancelEdit} type="button">Annuller</button>
+              {pendingEdit.row.transaction.recurrence !== "once" ? <button className="secondary-button" disabled={savingEdit} onClick={() => void applyEdit("only")} type="button">Kun {pendingEdit.monthLabel}</button> : null}
+              <button className={pendingEdit.value === 0 ? "danger-button" : "primary-button"} disabled={savingEdit} onClick={() => void applyEdit(pendingEdit.row.transaction.recurrence === "once" ? "only" : "forward")} type="button">{pendingEdit.row.transaction.recurrence === "once" ? "Fjern postering" : `Fra ${pendingEdit.monthLabel} og frem`}</button>
             </div>
-            <p className="repeat-budget-warning">Valget “og frem” erstatter beløbene i de efterfølgende synlige måneder.</p>
+            {editError ? <p className="modal-error" role="alert">{editError}</p> : null}
+            <p className="repeat-budget-warning">“Fra denne måned og frem” ændrer serien fra den valgte betaling og påvirker ikke tidligere måneder.</p>
           </section>
         </div>
       ) : null}
@@ -925,6 +915,7 @@ function TransactionModal({
   documents,
   initial,
   preferredCategoryId,
+  preferredDirection,
   onClose,
   onAddCategory,
   onDelete,
@@ -935,6 +926,7 @@ function TransactionModal({
   documents: HouseholdDocument[];
   initial?: FinanceTransaction | null;
   preferredCategoryId?: string | null;
+  preferredDirection?: "expense" | "income";
   onClose: () => void;
   onAddCategory: (name: string, categoryType: Exclude<FinanceCategoryType, "uncategorized">) => Promise<string | null>;
   onDelete: (transactionId: string) => Promise<boolean>;
@@ -944,7 +936,7 @@ function TransactionModal({
   const selectableCategories = categories.filter((category) => category.editable);
   const [merchant, setMerchant] = useState(initial?.merchant ?? "");
   const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
-  const [direction, setDirection] = useState<"expense" | "income">(initial?.direction ?? "expense");
+  const [direction, setDirection] = useState<"expense" | "income">(initial?.direction ?? preferredDirection ?? "expense");
   const [categoryId, setCategoryId] = useState(initial?.categoryId ?? preferredCategoryId ?? selectableCategories[0]?.id ?? "");
   const [occurredOn, setOccurredOn] = useState(initial?.occurredOn ?? new Date().toISOString().slice(0, 10));
   const [recurrence, setRecurrence] = useState<TransactionRecurrence>(initial?.recurrence ?? "once");
@@ -1173,19 +1165,24 @@ function DocumentUploadModal({
 }
 
 function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; financePeriod: FinancePeriodSnapshot; householdName: string }) {
-  const expenses = financePeriod.months.map((_, monthIndex) => financePeriod.categories.reduce((sum, category) => sum + category.planned[monthIndex], 0));
-  const available = financePeriod.incomePlanned.map((income, monthIndex) => income - expenses[monthIndex]);
+  const incomeRows = financePeriod.transactionRows.filter((row) => row.transaction.direction === "income");
+  const expenseGroups = financePeriod.categories.map((category) => ({ category, rows: financePeriod.transactionRows.filter((row) => row.transaction.direction === "expense" && (category.id === "uncategorized" ? !row.transaction.categoryId : row.transaction.categoryId === category.id)) }));
   return (
     <div className="print-sheets" aria-hidden="true">
       <article className="print-sheet budget-print">
         <header><span>Mit hjem</span><h1>Budget · {financePeriodLabel(financePeriod)}</h1><p>{householdName}</p></header>
-        <div className="print-summary"><div><small>Indtægter</small><strong>{currency.format(sumValues(financePeriod.incomePlanned))}</strong></div><div><small>Udgifter</small><strong>{currency.format(sumValues(expenses))}</strong></div><div><small>Til rådighed</small><strong>{currency.format(sumValues(available))}</strong></div></div>
-        <h2>Budget pr. måned</h2>
-        <table className="print-budget-table"><thead><tr><th>Kategori</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead><tbody>
-          <tr><td>Indtægter</td>{financePeriod.incomePlanned.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.incomePlanned))}</td></tr>
-          {financePeriod.categories.map((category) => <tr key={category.id}><td>{category.name}</td>{category.planned.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(category.planned))}</td></tr>)}
-          <tr><td>Udgifter i alt</td>{expenses.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(expenses))}</td></tr>
-          <tr><td>Til rådighed</td>{available.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(available))}</td></tr>
+        <div className="print-summary"><div><small>Indtægter</small><strong>{currency.format(sumValues(financePeriod.incomeValues))}</strong></div><div><small>Udgifter</small><strong>{currency.format(sumValues(financePeriod.expenseValues))}</strong></div><div><small>Til rådighed</small><strong>{currency.format(sumValues(financePeriod.availableValues))}</strong></div></div>
+        <h2>Posteringer pr. måned</h2>
+        <table className="print-budget-table"><thead><tr><th>Kategori / postering</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead><tbody>
+          <tr><td><strong>Indtægter</strong></td>{financePeriod.incomeValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.incomeValues))}</td></tr>
+          {incomeRows.map((row) => <tr key={row.transaction.id}><td>{row.transaction.merchant}</td>{row.values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{value ? budgetNumber.format(value) : "—"}</td>)}<td>{budgetNumber.format(sumValues(row.values))}</td></tr>)}
+          <tr><td><strong>Udgifter</strong></td>{financePeriod.expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.expenseValues))}</td></tr>
+          {expenseGroups.flatMap(({ category, rows }) => [
+            <tr key={`${category.id}-print-group`}><td><strong>{category.name}</strong></td>{category.planned.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(category.planned))}</td></tr>,
+            ...rows.map((row) => <tr key={`${row.transaction.id}-print`}><td>{row.transaction.merchant}</td>{row.values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{value ? budgetNumber.format(value) : "—"}</td>)}<td>{budgetNumber.format(sumValues(row.values))}</td></tr>),
+          ])}
+          <tr><td>Udgifter i alt</td>{financePeriod.expenseValues.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.expenseValues))}</td></tr>
+          <tr><td>Til rådighed</td>{financePeriod.availableValues.map((value, monthIndex) => <td key={monthIndex}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.availableValues))}</td></tr>
         </tbody></table>
       </article>
       <article className="print-sheet meal-print">
@@ -1271,6 +1268,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   const [transactionOpen, setTransactionOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<FinanceTransaction | null>(null);
   const [transactionCategoryId, setTransactionCategoryId] = useState<string | null>(null);
+  const [transactionDirection, setTransactionDirection] = useState<"expense" | "income">("expense");
   const [financeTransactions, setFinanceTransactions] = useState<FinanceTransaction[]>(householdId ? [] : demoFinance.transactions);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>(householdId ? [] : demoSubscriptions);
   const [subscriptionOpen, setSubscriptionOpen] = useState(false);
@@ -1373,6 +1371,14 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
     return () => { active = false; };
   }, [budgetPeriodMode, budgetYear, householdId, userId]);
 
+  useEffect(() => {
+    if (householdId) return;
+    const refreshDemoPeriod = window.setTimeout(() => {
+      setFinancePeriod(createDemoPeriodFinance(budgetPeriodMode, budgetYear));
+    }, 0);
+    return () => window.clearTimeout(refreshDemoPeriod);
+  }, [budgetPeriodMode, budgetYear, householdId]);
+
   const selectedCategory = finance.categories.find((category) => category.id === selectedCategoryId) ?? null;
   const title = useMemo(() => visibleNavItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view, visibleNavItems]);
   const displayName = user?.displayName || "Anders";
@@ -1446,8 +1452,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
     setSyncState("synced");
     setQuickAdd(null);
   };
-  const openNewTransaction = (categoryId: string | null = null) => { setEditingTransaction(null); setTransactionCategoryId(categoryId); setTransactionOpen(true); };
-  const openTransaction = (transaction: FinanceTransaction) => { setEditingTransaction(transaction); setTransactionCategoryId(transaction.categoryId); setTransactionOpen(true); };
+  const openNewTransaction = (categoryId: string | null = null, direction: "expense" | "income" = "expense") => { setEditingTransaction(null); setTransactionCategoryId(categoryId); setTransactionDirection(direction); setTransactionOpen(true); };
+  const openTransaction = (transaction: FinanceTransaction) => { setEditingTransaction(transaction); setTransactionCategoryId(transaction.categoryId); setTransactionDirection(transaction.direction); setTransactionOpen(true); };
   const refreshFinance = async () => {
     if (!householdId || !user) return;
     const [nextFinance, nextFinancePeriod, nextTransactions] = await Promise.all([
@@ -1469,6 +1475,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       setTransactionOpen(false);
       setEditingTransaction(null);
       setTransactionCategoryId(null);
+      setTransactionDirection("expense");
       setSyncState("synced");
       return true;
     } catch {
@@ -1485,6 +1492,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       setTransactionOpen(false);
       setEditingTransaction(null);
       setTransactionCategoryId(null);
+      setTransactionDirection("expense");
       setSyncState("synced");
       return true;
     } catch {
@@ -1529,61 +1537,28 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       return false;
     }
   };
-  const savePlannedAmount = async (categoryId: string, planned: number) => {
-    if (!isValidFinanceAmount(planned)) return;
+  const saveTransactionOccurrence = async (transaction: FinanceTransaction, occurredOn: string, amount: number, scope: TransactionOccurrenceEditScope) => {
+    if (!isValidFinanceAmount(amount)) return false;
     if (!householdId || !user) {
-      setFinance((snapshot) => ({
-        ...snapshot,
-        spendingTarget: snapshot.categories.reduce((sum, category) => sum + (category.id === categoryId ? planned : category.planned), 0),
-        categories: snapshot.categories.map((category) => category.id === categoryId ? { ...category, planned } : category),
-      }));
-      return;
+      setFinancePeriod((snapshot) => {
+        const transactionRows = snapshot.transactionRows.map((row) => row.occurrenceTransactions.some((candidate) => candidate?.id === transaction.id) ? {
+          ...row,
+          values: row.values.map((value, monthIndex) => row.occurrenceDates[monthIndex] === occurredOn ? amount : scope === "forward" && row.occurrenceDates[monthIndex] && row.occurrenceDates[monthIndex]! >= occurredOn ? amount : value),
+        } : row);
+        const totals = transactionPeriodTotals(transactionRows, snapshot.months.length);
+        return { ...snapshot, transactionRows, incomePlanned: totals.incomeValues, incomeActual: totals.incomeValues, expenseActual: totals.expenseValues, ...totals };
+      });
+      return true;
     }
     setSyncState("saving");
     try {
-      await updatePlannedAmount(householdId, finance, categoryId, planned);
-      const [nextFinance, nextFinancePeriod] = await Promise.all([loadFinance(householdId, user.id), loadFinancePeriod(householdId, user.id, budgetPeriodMode, budgetYear)]);
-      setFinance(nextFinance);
-      setFinancePeriod(nextFinancePeriod);
+      await updateFinanceTransactionOccurrence(householdId, user.id, transaction, occurredOn, amount, scope);
+      await refreshFinance();
       setSyncState("synced");
+      return true;
     } catch {
       setSyncState("error");
-    }
-  };
-  const savePeriodPlannedAmounts = async (categoryId: string, monthIndexes: number[], planned: number) => {
-    if (!isValidFinanceAmount(planned)) return;
-    if (!householdId || !user) {
-      const changedIndexes = new Set(monthIndexes);
-      setFinancePeriod((snapshot) => ({ ...snapshot, categories: snapshot.categories.map((category) => category.id === categoryId ? { ...category, planned: category.planned.map((value, index) => changedIndexes.has(index) ? planned : value) } : category) }));
-      return;
-    }
-    setSyncState("saving");
-    try {
-      await updatePeriodPlannedAmounts(householdId, financePeriod, categoryId, monthIndexes, planned);
-      const [nextFinance, nextFinancePeriod] = await Promise.all([loadFinance(householdId, user.id), loadFinancePeriod(householdId, user.id, budgetPeriodMode, budgetYear)]);
-      setFinance(nextFinance);
-      setFinancePeriod(nextFinancePeriod);
-      setSyncState("synced");
-    } catch {
-      setSyncState("error");
-    }
-  };
-  const savePeriodIncome = async (monthIndexes: number[], planned: number) => {
-    if (!isValidFinanceAmount(planned)) return;
-    if (!householdId || !user) {
-      const changedIndexes = new Set(monthIndexes);
-      setFinancePeriod((snapshot) => ({ ...snapshot, incomePlanned: snapshot.incomePlanned.map((value, index) => changedIndexes.has(index) ? planned : value) }));
-      return;
-    }
-    setSyncState("saving");
-    try {
-      await updatePeriodIncomeTargets(householdId, financePeriod, monthIndexes, planned);
-      const [nextFinance, nextFinancePeriod] = await Promise.all([loadFinance(householdId, user.id), loadFinancePeriod(householdId, user.id, budgetPeriodMode, budgetYear)]);
-      setFinance(nextFinance);
-      setFinancePeriod(nextFinancePeriod);
-      setSyncState("synced");
-    } catch {
-      setSyncState("error");
+      return false;
     }
   };
   const saveFinanceCategory = async (name: string, categoryType: Exclude<FinanceCategoryType, "uncategorized">) => {
@@ -1692,11 +1667,11 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
                 <button aria-selected={financeSection === "transactions"} className={financeSection === "transactions" ? "active" : ""} onClick={() => navigateFinance("transactions")} role="tab" type="button">Posteringer</button>
                 <button aria-selected={financeSection === "subscriptions"} className={financeSection === "subscriptions" ? "active" : ""} onClick={() => navigateFinance("subscriptions")} role="tab" type="button">Abonnementer</button>
               </div>
-              {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} onPlannedChange={savePlannedAmount} /> : null}
-              {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={async (name, categoryType) => Boolean(await saveFinanceCategory(name, categoryType))} onAddTransaction={() => openNewTransaction()} onExport={() => exportPdf("budget")} onIncomeChange={savePeriodIncome} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onPeriodModeChange={setBudgetPeriodMode} onPlannedChange={savePeriodPlannedAmounts} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
+              {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} /> : null}
+              {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={async (name, categoryType) => Boolean(await saveFinanceCategory(name, categoryType))} onAddTransaction={(direction, categoryId) => openNewTransaction(categoryId ?? null, direction)} onEditTransaction={openTransaction} onExport={() => exportPdf("budget")} onOccurrenceChange={saveTransactionOccurrence} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onPeriodModeChange={setBudgetPeriodMode} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
               {financeSection === "transactions" ? <TransactionsView categories={finance.categories} onAdd={() => openNewTransaction()} onDelete={(transaction) => removeTransaction(transaction.id)} onEdit={openTransaction} transactions={financeTransactions} /> : null}
               {financeSection === "subscriptions" ? <SubscriptionsView documents={householdDocuments} onAdd={openNewSubscription} onDelete={(subscription) => removeSubscription(subscription.id)} onEdit={openSubscription} onOpenDocument={openDocument} subscriptions={subscriptions} transactions={financeTransactions} /> : null}
-              {financeSection === "category" && selectedCategory ? <CategoryDetailView category={selectedCategory} onAddTransaction={() => openNewTransaction(selectedCategory.id)} onBack={() => navigateFinance("overview")} onEditTransaction={openTransaction} onPlannedChange={savePlannedAmount} transactions={financeTransactions} /> : null}
+              {financeSection === "category" && selectedCategory ? <CategoryDetailView category={selectedCategory} onAddTransaction={() => openNewTransaction(selectedCategory.id)} onBack={() => navigateFinance("overview")} onEditTransaction={openTransaction} transactions={financeTransactions} /> : null}
               {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
             </div>
           ) : null}
@@ -1711,7 +1686,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       </nav>
 
       {quickAdd ? <QuickAdd kind={quickAdd} onClose={() => setQuickAdd(null)} onAdd={addItem} /> : null}
-      {transactionOpen ? <TransactionModal categories={finance.categories} documents={householdDocuments} initial={editingTransaction} preferredCategoryId={transactionCategoryId} onAddCategory={saveFinanceCategory} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); }} onDelete={removeTransaction} onOpenDocument={openDocument} onSave={saveTransaction} /> : null}
+      {transactionOpen ? <TransactionModal categories={finance.categories} documents={householdDocuments} initial={editingTransaction} preferredCategoryId={transactionCategoryId} preferredDirection={transactionDirection} onAddCategory={saveFinanceCategory} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); setTransactionDirection("expense"); }} onDelete={removeTransaction} onOpenDocument={openDocument} onSave={saveTransaction} /> : null}
       {subscriptionOpen ? <SubscriptionModal documents={householdDocuments} initial={editingSubscription} onClose={() => { setSubscriptionOpen(false); setEditingSubscription(null); }} onDelete={removeSubscription} onOpenDocument={openDocument} onSave={saveSubscription} transactions={financeTransactions} /> : null}
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = Boolean(await saveFinanceCategory(name, categoryType)); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}

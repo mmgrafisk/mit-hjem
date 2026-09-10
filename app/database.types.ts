@@ -672,6 +672,57 @@ export type Database = {
           },
         ]
       }
+      transaction_occurrence_overrides: {
+        Row: {
+          amount: number | null
+          created_at: string
+          created_by: string
+          household_id: string
+          id: string
+          is_skipped: boolean
+          occurred_on: string
+          transaction_id: string
+          updated_at: string
+        }
+        Insert: {
+          amount?: number | null
+          created_at?: string
+          created_by: string
+          household_id: string
+          id?: string
+          is_skipped?: boolean
+          occurred_on: string
+          transaction_id: string
+          updated_at?: string
+        }
+        Update: {
+          amount?: number | null
+          created_at?: string
+          created_by?: string
+          household_id?: string
+          id?: string
+          is_skipped?: boolean
+          occurred_on?: string
+          transaction_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transaction_occurrence_overrides_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transaction_occurrence_overrides_transaction_id_household_id_fkey"
+            columns: ["transaction_id", "household_id"]
+            isOneToOne: false
+            referencedRelation: "transactions"
+            referencedColumns: ["id", "household_id"]
+          },
+        ]
+      }
       transaction_documents: {
         Row: {
           created_at: string
@@ -736,6 +787,26 @@ export type Database = {
       ensure_budget_months: {
         Args: { p_household_id: string; p_months: string[] }
         Returns: undefined
+      }
+      set_transaction_occurrence_override: {
+        Args: {
+          p_amount: number | null
+          p_household_id: string
+          p_occurred_on: string
+          p_skip: boolean
+          p_transaction_id: string
+        }
+        Returns: undefined
+      }
+      split_recurring_transaction: {
+        Args: {
+          p_amount: number | null
+          p_effective_on: string
+          p_household_id: string
+          p_stop: boolean
+          p_transaction_id: string
+        }
+        Returns: string | null
       }
       update_budget_plans: {
         Args: {
