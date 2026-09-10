@@ -1,0 +1,8 @@
+create index transaction_documents_transaction_household_fk_idx on public.transaction_documents(transaction_id, household_id);
+create index transaction_documents_document_household_fk_idx on public.transaction_documents(document_id, household_id);
+create index transaction_documents_created_by_idx on public.transaction_documents(created_by);
+create index subscriptions_transaction_household_fk_idx on public.subscriptions(linked_transaction_id, household_id) where linked_transaction_id is not null;
+create index subscriptions_created_by_idx on public.subscriptions(created_by);
+create index subscription_documents_subscription_household_fk_idx on public.subscription_documents(subscription_id, household_id);
+create index subscription_documents_document_household_fk_idx on public.subscription_documents(document_id, household_id);
+create index subscription_documents_created_by_idx on public.subscription_documents(created_by);

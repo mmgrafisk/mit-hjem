@@ -219,6 +219,124 @@ export type Database = {
           },
         ]
       }
+      subscription_documents: {
+        Row: {
+          created_at: string
+          created_by: string
+          document_id: string
+          household_id: string
+          subscription_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          document_id: string
+          household_id: string
+          subscription_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          document_id?: string
+          household_id?: string
+          subscription_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subscription_documents_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subscription_documents_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subscription_documents_subscription_id_fkey"
+            columns: ["subscription_id"]
+            isOneToOne: false
+            referencedRelation: "subscriptions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      subscriptions: {
+        Row: {
+          account_identifier: string | null
+          amount: number | null
+          billing_interval_months: number
+          cancellation_deadline_on: string | null
+          created_at: string
+          created_by: string
+          household_id: string
+          id: string
+          linked_transaction_id: string | null
+          name: string
+          next_payment_on: string | null
+          password_manager_url: string | null
+          status: string
+          trial_ends_on: string | null
+          updated_at: string
+          website_url: string | null
+        }
+        Insert: {
+          account_identifier?: string | null
+          amount?: number | null
+          billing_interval_months?: number
+          cancellation_deadline_on?: string | null
+          created_at?: string
+          created_by: string
+          household_id: string
+          id?: string
+          linked_transaction_id?: string | null
+          name: string
+          next_payment_on?: string | null
+          password_manager_url?: string | null
+          status?: string
+          trial_ends_on?: string | null
+          updated_at?: string
+          website_url?: string | null
+        }
+        Update: {
+          account_identifier?: string | null
+          amount?: number | null
+          billing_interval_months?: number
+          cancellation_deadline_on?: string | null
+          created_at?: string
+          created_by?: string
+          household_id?: string
+          id?: string
+          linked_transaction_id?: string | null
+          name?: string
+          next_payment_on?: string | null
+          password_manager_url?: string | null
+          status?: string
+          trial_ends_on?: string | null
+          updated_at?: string
+          website_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subscriptions_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "subscriptions_linked_transaction_id_fkey"
+            columns: ["linked_transaction_id"]
+            isOneToOne: false
+            referencedRelation: "transactions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       household_members: {
         Row: {
           household_id: string
@@ -494,6 +612,7 @@ export type Database = {
           merchant: string
           note: string | null
           occurred_on: string
+          recurrence_end_on: string | null
           recurrence_group_id: string | null
           recurrence_interval_months: number | null
           source: string
@@ -511,6 +630,7 @@ export type Database = {
           merchant: string
           note?: string | null
           occurred_on?: string
+          recurrence_end_on?: string | null
           recurrence_group_id?: string | null
           recurrence_interval_months?: number | null
           source?: string
@@ -528,6 +648,7 @@ export type Database = {
           merchant?: string
           note?: string | null
           occurred_on?: string
+          recurrence_end_on?: string | null
           recurrence_group_id?: string | null
           recurrence_interval_months?: number | null
           source?: string
@@ -547,6 +668,52 @@ export type Database = {
             columns: ["household_id"]
             isOneToOne: false
             referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transaction_documents: {
+        Row: {
+          created_at: string
+          created_by: string
+          document_id: string
+          household_id: string
+          transaction_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          document_id: string
+          household_id: string
+          transaction_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          document_id?: string
+          household_id?: string
+          transaction_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transaction_documents_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transaction_documents_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transaction_documents_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
+            referencedRelation: "transactions"
             referencedColumns: ["id"]
           },
         ]

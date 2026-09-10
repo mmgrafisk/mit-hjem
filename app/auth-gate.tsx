@@ -11,6 +11,8 @@ type Household = { id: string; name: string };
 
 type AuthGateProps = {
   appUrl: string | null;
+  initialPath?: string;
+  localPreview?: boolean;
   supabaseConfig: PublicSupabaseConfig | null;
 };
 
@@ -67,6 +69,7 @@ async function ensureHousehold(user: User): Promise<Household> {
     .from("household_members")
     .select("household_id, households(id, name)")
     .eq("user_id", user.id)
+    .order("joined_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (membershipResult.error) throw membershipResult.error;
@@ -132,7 +135,7 @@ function ConfigurationErrorScreen() {
   );
 }
 
-function ConfiguredAuthGate({ appUrl, supabaseConfig }: { appUrl: string | null; supabaseConfig: PublicSupabaseConfig }) {
+function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabaseConfig }: { appUrl: string | null; initialPath?: string; localPreview?: boolean; supabaseConfig: PublicSupabaseConfig }) {
   const supabase = useMemo(() => getSupabaseBrowserClient(supabaseConfig), [supabaseConfig]);
   const [session, setSession] = useState<Session | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
@@ -248,6 +251,7 @@ function ConfiguredAuthGate({ appUrl, supabaseConfig }: { appUrl: string | null;
     }
   };
 
+  if (localPreview) return <HouseholdApp initialPath={initialPath} />;
   if (!sessionReady) return <LoadingScreen />;
   if (session && !household && !error) return <LoadingScreen label="Gør din husstand klar…" />;
   if (session && !household && error) {
@@ -267,6 +271,7 @@ function ConfiguredAuthGate({ appUrl, supabaseConfig }: { appUrl: string | null;
       <HouseholdApp
         householdId={household.id}
         householdName={household.name}
+        initialPath={initialPath}
         onSignOut={async () => { await supabase.auth.signOut(); }}
         user={{ id: session.user.id, email: session.user.email ?? "", displayName: userName(session.user) }}
       />
@@ -304,7 +309,7 @@ function ConfiguredAuthGate({ appUrl, supabaseConfig }: { appUrl: string | null;
   );
 }
 
-export function AuthGate({ appUrl, supabaseConfig }: AuthGateProps) {
+export function AuthGate({ appUrl, initialPath, localPreview = false, supabaseConfig }: AuthGateProps) {
   if (!supabaseConfig) return <ConfigurationErrorScreen />;
-  return <ConfiguredAuthGate appUrl={appUrl} supabaseConfig={supabaseConfig} />;
+  return <ConfiguredAuthGate appUrl={appUrl} initialPath={initialPath} localPreview={localPreview} supabaseConfig={supabaseConfig} />;
 }
