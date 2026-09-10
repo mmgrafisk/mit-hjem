@@ -11,6 +11,7 @@ import {
   shouldPromptForBudgetEdit,
   transactionRecurrenceLabel,
 } from "../app/finance-data";
+import { financeRoute, readFinanceRoute } from "../app/household-app";
 
 test("builds a rolling 12-month period across a year boundary", () => {
   assert.deepEqual(
@@ -77,7 +78,21 @@ test("builds recurring transaction dates through the next 12 months", () => {
     "2026-07-31", "2026-08-31", "2026-09-30", "2026-10-31", "2026-11-30", "2026-12-31",
   ]);
   assert.deepEqual(recurringTransactionDates("2026-08-15", "quarterly"), ["2026-08-15", "2026-11-15", "2027-02-15", "2027-05-15"]);
+  assert.deepEqual(recurringTransactionDates("2026-08-15", "every_2_months"), ["2026-08-15", "2026-10-15", "2026-12-15", "2027-02-15", "2027-04-15", "2027-06-15"]);
   assert.deepEqual(recurringTransactionDates("2026-08-15", "half_yearly"), ["2026-08-15", "2027-02-15"]);
   assert.deepEqual(recurringTransactionDates("2026-08-15", "once"), ["2026-08-15"]);
   assert.equal(transactionRecurrenceLabel("every_2_months"), "Hver anden måned");
+});
+
+test("round-trips every stable finance route", () => {
+  assert.deepEqual(readFinanceRoute("/oekonomi"), { section: "overview", categoryId: null });
+  assert.deepEqual(readFinanceRoute("/oekonomi/budget"), { section: "budget", categoryId: null });
+  assert.deepEqual(readFinanceRoute("/oekonomi/posteringer"), { section: "transactions", categoryId: null });
+  assert.deepEqual(readFinanceRoute("/oekonomi/kategorier/mad%20og%20hus"), { section: "category", categoryId: "mad og hus" });
+  assert.equal(readFinanceRoute("/oekonomi/ukendt"), null);
+
+  for (const [section, categoryId] of [["overview", null], ["budget", null], ["transactions", null], ["category", "mad og hus"]] as const) {
+    const url = financeRoute(section, categoryId);
+    assert.deepEqual(readFinanceRoute(url), { section, categoryId });
+  }
 });

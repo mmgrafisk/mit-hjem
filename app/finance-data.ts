@@ -650,6 +650,7 @@ export async function addFinanceCategory(householdId: string, snapshot: Pick<Fin
     p_category_type: categoryType,
   });
   if (result.error) throw result.error;
+  return result.data;
 }
 
 export function financeMonthLabel(month: string) {

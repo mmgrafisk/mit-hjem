@@ -425,6 +425,12 @@ main { padding: 20px 24px 44px; }
 .direction-switch button.active { color: white; background: var(--primary); }
 .transaction-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .transaction-grid .wide { grid-column: 1 / -1; }
+.transaction-category-field { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.field-label-with-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.field-label-with-action > label { display: block; }
+.field-label-with-action > button { display: flex; align-items: center; gap: 4px; padding: 2px 0; color: var(--primary); background: transparent; border: 0; cursor: pointer; font-size: 11px; font-weight: 720; }
+.inline-category-creator { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; align-items: end; gap: 8px; padding: 10px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; }
+.inline-category-creator .secondary-button { min-height: 43px; justify-content: center; white-space: nowrap; }
 .modal-error { margin: 0; padding: 10px 12px; color: #a12b21; background: #fff1ef; border: 1px solid #ffd5cf; border-radius: 8px; font-size: 13px; }
 .file-drop { position: relative; min-height: 118px; display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: 5px !important; padding: 18px; color: var(--muted); background: var(--surface-soft); border: 1.5px dashed color-mix(in srgb, var(--primary) 45%, var(--line)); border-radius: 11px; cursor: pointer; text-align: center; }
 .file-drop > svg { color: var(--primary); }.file-drop strong { color: var(--ink); font-size: 14px; }.file-drop small { font-size: 12px; }
@@ -435,6 +441,11 @@ main { padding: 20px 24px 44px; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 35%, transparent); outline-offset: 2px; }
 .print-sheets { display: none; }
 
+@media (max-width: 1440px) {
+  .finance-workspace-header { grid-template-columns: 1fr; gap: 10px; }
+  .finance-workspace-tools { justify-content: flex-start; flex-wrap: wrap; }
+}
+
 @media (max-width: 1120px) {
   .dashboard-grid { grid-template-columns: 1.35fr 1fr; }
   .budget-hero { grid-column: 1 / 2; }.payments-panel { grid-column: 2 / 3; }.approval-panel { grid-column: 1 / -1; }
@@ -442,8 +453,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .shopping-panel { grid-column: 1 / 2; }.meal-panel { grid-column: 2 / 3; }
   .meal-strip { grid-template-columns: repeat(2, 1fr); }.meal-strip button { border-bottom: 1px solid var(--line); }
   .meal-strip button:nth-child(n+5) { display: none; }
-  .finance-workspace-header { grid-template-columns: 1fr; gap: 10px; }
-  .finance-workspace-tools { justify-content: flex-start; flex-wrap: wrap; }
   .finance-header-actions { width: auto; }
   .budget-summary { grid-template-columns: repeat(2, 1fr); }
   .budget-summary > div:nth-child(2) { border-right: 0; }
@@ -508,6 +517,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .transaction-filters { grid-template-columns: 1fr; }
   .category-detail-summary { grid-template-columns: 1fr; }
   .transaction-grid { grid-template-columns: 1fr; }.transaction-grid .wide { grid-column: 1; }
+  .inline-category-creator { grid-template-columns: 1fr; }
   .repeat-budget-actions { grid-template-columns: 1fr; }
   .module-intro { margin: 5px 3px 14px; }.module-intro h1 { font-size: 24px; }.module-intro p { font-size: 13px; }
   .toolbar { align-items: stretch; }.toolbar > button { width: 42px; padding: 0; justify-content: center; font-size: 0; }

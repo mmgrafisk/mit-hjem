@@ -895,6 +895,7 @@ function TransactionModal({
   initial,
   preferredCategoryId,
   onClose,
+  onAddCategory,
   onDelete,
   onSave,
 }: {
@@ -902,6 +903,7 @@ function TransactionModal({
   initial?: FinanceTransaction | null;
   preferredCategoryId?: string | null;
   onClose: () => void;
+  onAddCategory: (name: string, categoryType: Exclude<FinanceCategoryType, "uncategorized">) => Promise<string | null>;
   onDelete: (transactionId: string) => Promise<boolean>;
   onSave: (transaction: NewTransaction) => Promise<boolean>;
 }) {
@@ -913,6 +915,10 @@ function TransactionModal({
   const [occurredOn, setOccurredOn] = useState(initial?.occurredOn ?? new Date().toISOString().slice(0, 10));
   const [recurrence, setRecurrence] = useState<TransactionRecurrence>(initial?.recurrence ?? "once");
   const [transactionStatus, setTransactionStatus] = useState<"approved" | "scheduled">(initial?.status ?? "approved");
+  const [categoryCreatorOpen, setCategoryCreatorOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryType, setNewCategoryType] = useState<Exclude<FinanceCategoryType, "uncategorized">>("variable_expense");
+  const [addingCategory, setAddingCategory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -942,7 +948,25 @@ function TransactionModal({
           <label className="wide">Navn<input autoFocus maxLength={160} onChange={(event) => setMerchant(event.target.value)} placeholder="Fx Rema 1000 eller løn" required value={merchant} /></label>
           <label>Beløb<input inputMode="decimal" min="0.01" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" required step="0.01" type="number" value={amount} /></label>
           <label>Dato<input onChange={(event) => setOccurredOn(event.target.value)} required type="date" value={occurredOn} /></label>
-          {direction === "expense" ? <label className="wide">Kategori<select onChange={(event) => setCategoryId(event.target.value)} value={categoryId}><option value="">Ikke kategoriseret</option>{selectableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label> : null}
+          {direction === "expense" ? <div className="wide transaction-category-field">
+            <span className="field-label-with-action"><label htmlFor="transaction-category">Kategori</label><button onClick={() => setCategoryCreatorOpen((open) => !open)} type="button"><Plus size={14} />Opret kategori i posteringen</button></span>
+            <select id="transaction-category" onChange={(event) => setCategoryId(event.target.value)} value={categoryId}><option value="">Ikke kategoriseret</option>{selectableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+            {categoryCreatorOpen ? <div className="inline-category-creator">
+              <label>Navn<input maxLength={80} onChange={(event) => setNewCategoryName(event.target.value)} placeholder="Fx Børnepasning" value={newCategoryName} /></label>
+              <label>Type<select onChange={(event) => setNewCategoryType(event.target.value as typeof newCategoryType)} value={newCategoryType}><option value="fixed_expense">Fast udgift</option><option value="variable_expense">Variabel udgift</option><option value="saving">Opsparing</option><option value="debt">Gæld og afdrag</option></select></label>
+              <button className="secondary-button" disabled={addingCategory || !newCategoryName.trim()} onClick={async () => {
+                setAddingCategory(true);
+                setError(null);
+                const createdCategoryId = await onAddCategory(newCategoryName.trim(), newCategoryType);
+                if (createdCategoryId) {
+                  setCategoryId(createdCategoryId);
+                  setNewCategoryName("");
+                  setCategoryCreatorOpen(false);
+                } else setError("Kategorien kunne ikke oprettes. Navnet findes måske allerede.");
+                setAddingCategory(false);
+              }} type="button">{addingCategory ? "Opretter…" : "Opret og vælg"}</button>
+            </div> : null}
+          </div> : null}
           <label className="wide"><span className="field-label-with-icon"><Repeat2 size={15} />Gentagelse</span><select disabled={Boolean(initial?.recurrenceGroupId)} onChange={(event) => setRecurrence(event.target.value as TransactionRecurrence)} value={recurrence}><option value="once">Kun denne måned</option><option value="monthly">Hver måned</option><option value="every_2_months">Hver anden måned</option><option value="quarterly">Hvert kvartal</option><option value="half_yearly">Hvert halve år</option></select>{initial?.recurrenceGroupId ? <small>Gentagelsen er låst; denne forekomst kan stadig rettes.</small> : <small>Gentagelser oprettes 12 måneder frem.</small>}</label>
           {initial ? <label className="wide">Status<select onChange={(event) => setTransactionStatus(event.target.value as typeof transactionStatus)} value={transactionStatus}><option value="approved">Bogført</option><option value="scheduled">Planlagt</option></select></label> : null}
         </div>
@@ -1032,7 +1056,7 @@ function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks:
   );
 }
 
-function readFinanceRoute(pathname: string): { section: FinanceSection; categoryId: string | null } | null {
+export function readFinanceRoute(pathname: string): { section: FinanceSection; categoryId: string | null } | null {
   const categoryMatch = pathname.match(/^\/oekonomi\/kategorier\/([^/]+)\/?$/);
   if (categoryMatch) return { section: "category", categoryId: decodeURIComponent(categoryMatch[1]) };
   if (/^\/oekonomi\/budget\/?$/.test(pathname)) return { section: "budget", categoryId: null };
@@ -1041,7 +1065,7 @@ function readFinanceRoute(pathname: string): { section: FinanceSection; category
   return null;
 }
 
-function financeRoute(section: FinanceSection, categoryId?: string | null) {
+export function financeRoute(section: FinanceSection, categoryId?: string | null) {
   if (section === "category" && categoryId) return `/oekonomi/kategorier/${encodeURIComponent(categoryId)}`;
   if (section === "budget") return "/oekonomi/budget";
   if (section === "transactions") return "/oekonomi/posteringer";
@@ -1137,6 +1161,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
         setSelectedCategoryId(null);
       }
     };
+    handleHistory();
     window.addEventListener("popstate", handleHistory);
     return () => window.removeEventListener("popstate", handleHistory);
   }, []);
@@ -1356,19 +1381,19 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       const categoryId = `demo-${Date.now()}`;
       setFinance((snapshot) => ({ ...snapshot, categories: [...snapshot.categories, { id: categoryId, budgetItemId: `${categoryId}-item`, name, color: "#4A7A91", categoryType, editable: true, planned: 0, spent: 0 }] }));
       setFinancePeriod((snapshot) => ({ ...snapshot, categories: [...snapshot.categories, { id: categoryId, name, color: "#4A7A91", categoryType, editable: true, budgetItemIds: Array(snapshot.months.length).fill(null), planned: Array(snapshot.months.length).fill(0), actual: Array(snapshot.months.length).fill(0) }] }));
-      return true;
+      return categoryId;
     }
     setSyncState("saving");
     try {
-      await addFinanceCategory(householdId, financePeriod, name, categoryType);
+      const categoryId = await addFinanceCategory(householdId, financePeriod, name, categoryType);
       const [nextFinance, nextFinancePeriod] = await Promise.all([loadFinance(householdId, user.id), loadFinancePeriod(householdId, user.id, budgetPeriodMode, budgetYear)]);
       setFinance(nextFinance);
       setFinancePeriod(nextFinancePeriod);
       setSyncState("synced");
-      return true;
+      return categoryId;
     } catch {
       setSyncState("error");
-      return false;
+      return null;
     }
   };
   const saveDocument = async (file: File, documentTitle: string, kind: DocumentKind, visibility: DocumentVisibility) => {
@@ -1457,7 +1482,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
                 <button aria-selected={financeSection === "transactions"} className={financeSection === "transactions" ? "active" : ""} onClick={() => navigateFinance("transactions")} role="tab" type="button">Posteringer</button>
               </div>
               {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} onPlannedChange={savePlannedAmount} /> : null}
-              {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={saveFinanceCategory} onAddTransaction={() => openNewTransaction()} onExport={() => exportPdf("budget")} onIncomeChange={savePeriodIncome} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onPeriodModeChange={setBudgetPeriodMode} onPlannedChange={savePeriodPlannedAmounts} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
+              {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={async (name, categoryType) => Boolean(await saveFinanceCategory(name, categoryType))} onAddTransaction={() => openNewTransaction()} onExport={() => exportPdf("budget")} onIncomeChange={savePeriodIncome} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onPeriodModeChange={setBudgetPeriodMode} onPlannedChange={savePeriodPlannedAmounts} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
               {financeSection === "transactions" ? <TransactionsView categories={finance.categories} onAdd={() => openNewTransaction()} onEdit={openTransaction} transactions={financeTransactions} /> : null}
               {financeSection === "category" && selectedCategory ? <CategoryDetailView category={selectedCategory} onAddTransaction={() => openNewTransaction(selectedCategory.id)} onBack={() => navigateFinance("overview")} onEditTransaction={openTransaction} onPlannedChange={savePlannedAmount} transactions={financeTransactions} /> : null}
               {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
@@ -1474,8 +1499,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", user, on
       </nav>
 
       {quickAdd ? <QuickAdd kind={quickAdd} onClose={() => setQuickAdd(null)} onAdd={addItem} /> : null}
-      {transactionOpen ? <TransactionModal categories={finance.categories} initial={editingTransaction} preferredCategoryId={transactionCategoryId} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); }} onDelete={removeTransaction} onSave={saveTransaction} /> : null}
-      {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = await saveFinanceCategory(name, categoryType); if (saved) setCategoryOpen(false); return saved; }} /> : null}
+      {transactionOpen ? <TransactionModal categories={finance.categories} initial={editingTransaction} preferredCategoryId={transactionCategoryId} onAddCategory={saveFinanceCategory} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); }} onDelete={removeTransaction} onSave={saveTransaction} /> : null}
+      {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = Boolean(await saveFinanceCategory(name, categoryType)); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
       <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} />
     </div>

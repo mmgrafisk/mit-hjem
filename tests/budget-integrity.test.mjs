@@ -52,5 +52,13 @@ test("finance categories and transaction history have stable routes", async () =
   assert.match(app, /\/oekonomi\/kategorier\//);
   assert.match(app, /\/oekonomi\/posteringer/);
   assert.match(app, /window\.history\.pushState/);
+  assert.match(app, /handleHistory\(\);\s*window\.addEventListener\("popstate", handleHistory\)/);
   assert.match(app, /Posteringer<\/button>/);
+});
+
+test("a new posting can create and immediately select a missing category", async () => {
+  const [finance, app] = await Promise.all([readFile(financePath, "utf8"), readFile(appPath, "utf8")]);
+  assert.match(finance, /return result\.data/);
+  assert.match(app, /Opret kategori i posteringen/);
+  assert.match(app, /onAddCategory/);
 });
