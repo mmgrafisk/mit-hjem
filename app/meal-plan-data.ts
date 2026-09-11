@@ -15,6 +15,14 @@ export type MealPlanItem = {
 
 export type NewMealPlanItem = Omit<MealPlanItem, "id" | "mealPlanId">;
 
+export function nextMealSlot(items: MealPlanItem[], dayOfWeek: number) {
+  const occupied = new Set(items.filter((item) => item.dayOfWeek === dayOfWeek).map((item) => item.mealSlot));
+  for (let slot = 1; slot <= 6; slot += 1) {
+    if (!occupied.has(slot)) return slot;
+  }
+  return null;
+}
+
 export function mondayFor(date = new Date()) {
   const next = new Date(date);
   const day = next.getDay() || 7;

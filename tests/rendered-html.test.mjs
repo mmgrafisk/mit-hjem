@@ -137,6 +137,10 @@ test("keeps templates, languages and printable exports configurable", async () =
   assert.match(app, /PrintSheets/);
   assert.match(app, /Budget som PDF/);
   assert.match(app, /Madplan som PDF/);
+  assert.match(app, /loadMealPlan\(householdId, mondayFor\(\)\)/);
+  assert.match(app, /sampleMode \? shopping\.map/);
+  assert.match(app, /Ingen planlagte måltider i denne uge/);
+  assert.doesNotMatch(app, /mealItems\.length \? mealItems\.map[\s\S]*?: meals\.map/);
   assert.match(app, /prefers-color-scheme: dark/);
   assert.match(app, /mit-hjem:preferences:v1/);
   assert.match(app, /Vælg udseende/);

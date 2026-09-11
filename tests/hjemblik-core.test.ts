@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { expandCalendarEvents, type CalendarEvent } from "../app/calendar-data";
-import { aggregateIngredients, mergeShoppingQuantity, parseShoppingQuantity, type MealPlanItem } from "../app/meal-plan-data";
+import { aggregateIngredients, mergeShoppingQuantity, nextMealSlot, parseShoppingQuantity, type MealPlanItem } from "../app/meal-plan-data";
 import { dueReminderOccurrences, type ReminderEvent } from "../supabase/functions/_shared/calendar-recurrence";
 
 process.env.TZ = "Europe/Copenhagen";
@@ -42,6 +42,17 @@ test("indkøbsmængder lægges til eksisterende varer med samme enhed", () => {
   assert.deepEqual(existing, { quantity: 1.5, unit: "kg" });
   assert.deepEqual(mergeShoppingQuantity(existing, { quantity: 0.75, unit: "kg" }), { quantity: 2.25, unit: "kg" });
   assert.notDeepEqual(parseShoppingQuantity("2 stk"), parseShoppingQuantity("2 kg"));
+});
+
+test("nyt måltid genbruger første ledige plads efter en sletning", () => {
+  const items = [
+    { id: "1", mealPlanId: "p", dayOfWeek: 1, mealSlot: 1, title: "A", servings: 2, durationMinutes: null, notes: null, ingredients: [] },
+    { id: "3", mealPlanId: "p", dayOfWeek: 1, mealSlot: 3, title: "C", servings: 2, durationMinutes: null, notes: null, ingredients: [] },
+    { id: "4", mealPlanId: "p", dayOfWeek: 1, mealSlot: 4, title: "D", servings: 2, durationMinutes: null, notes: null, ingredients: [] },
+  ] satisfies MealPlanItem[];
+  assert.equal(nextMealSlot(items, 1), 2);
+  assert.equal(nextMealSlot(items, 2), 1);
+  assert.equal(nextMealSlot([...items, { ...items[0], id: "2", mealSlot: 2 }, { ...items[0], id: "5", mealSlot: 5 }, { ...items[0], id: "6", mealSlot: 6 }], 1), null);
 });
 
 function reminderEvent(overrides: Partial<ReminderEvent> = {}): ReminderEvent {

@@ -103,7 +103,7 @@ import { getSupabaseBrowserClient } from "./supabase-client";
 import { CalendarView } from "./calendar-view";
 import { HouseholdView } from "./household-view";
 import { MealPlanView } from "./meal-plan-view";
-import type { MealPlanItem } from "./meal-plan-data";
+import { aggregateIngredients, formatShoppingQuantity, loadMealPlan, mondayFor, type MealPlanItem } from "./meal-plan-data";
 import { loadNotifications, markNotificationRead, type HouseholdNotification } from "./notifications-data";
 
 type View =
@@ -1178,9 +1178,13 @@ function DocumentUploadModal({
   );
 }
 
-function PrintSheets({ tasks, shopping, financePeriod, householdName, mealItems }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; financePeriod: FinancePeriodSnapshot; householdName: string; mealItems: MealPlanItem[] }) {
+function PrintSheets({ tasks, shopping, financePeriod, householdName, mealItems, mealWeekStart, sampleMode }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; financePeriod: FinancePeriodSnapshot; householdName: string; mealItems: MealPlanItem[]; mealWeekStart: string; sampleMode: boolean }) {
   const incomeRows = financePeriod.transactionRows.filter((row) => row.transaction.direction === "income");
   const expenseGroups = financePeriod.categories.map((category) => ({ category, rows: financePeriod.transactionRows.filter((row) => row.transaction.direction === "expense" && (category.id === "uncategorized" ? !row.transaction.categoryId : row.transaction.categoryId === category.id)) }));
+  const mealIngredients = aggregateIngredients(mealItems);
+  const mealWeekEnd = new Date(`${mealWeekStart}T12:00:00`);
+  mealWeekEnd.setDate(mealWeekEnd.getDate() + 6);
+  const mealWeekLabel = `${new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short" }).format(new Date(`${mealWeekStart}T12:00:00`))} – ${new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short", year: "numeric" }).format(mealWeekEnd)}`;
   return (
     <div className="print-sheets" aria-hidden="true">
       <article className="print-sheet budget-print">
@@ -1200,10 +1204,10 @@ function PrintSheets({ tasks, shopping, financePeriod, householdName, mealItems 
         </tbody></table>
       </article>
       <article className="print-sheet meal-print">
-        <header><span>{productConfig.name}</span><h1>Madplan</h1><p>{mealItems.length} planlagte måltider</p></header>
-        <div className="print-meals">{mealItems.length ? mealItems.map((item) => <div key={item.id}><strong>{["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag", "Lørdag", "Søndag"][item.dayOfWeek - 1]}</strong><span>{item.title} · {item.servings} portioner</span>{item.ingredients.length ? <small>{item.ingredients.map((ingredient) => `${ingredient.quantity ?? ""} ${ingredient.unit ?? ""} ${ingredient.name}`.trim()).join(", ")}</small> : null}</div>) : meals.map(([day, meal]) => <div key={day}><strong>{day}</strong><span>{meal}</span></div>)}</div>
+        <header><span>{productConfig.name}</span><h1>Madplan</h1><p>{mealWeekLabel} · {mealItems.length} planlagte måltider</p></header>
+        <div className="print-meals">{mealItems.length ? mealItems.map((item) => <div key={item.id}><strong>{["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag", "Lørdag", "Søndag"][item.dayOfWeek - 1]}</strong><span>{item.title} · {item.servings} portioner</span>{item.ingredients.length ? <small>{item.ingredients.map((ingredient) => `${ingredient.quantity ?? ""} ${ingredient.unit ?? ""} ${ingredient.name}`.trim()).join(", ")}</small> : null}</div>) : sampleMode ? meals.map(([day, meal]) => <div key={day}><strong>{day}</strong><span>{meal}</span></div>) : <p className="print-empty">Ingen planlagte måltider i denne uge.</p>}</div>
         <h2>Indkøbsliste</h2>
-        <div className="print-shopping">{shopping.map((item) => <span key={item.id}>□ {item.title}</span>)}</div>
+        <div className="print-shopping">{sampleMode ? shopping.map((item) => <span key={item.id}>□ {item.title}</span>) : mealIngredients.length ? mealIngredients.map((ingredient) => <span key={`${ingredient.name}-${ingredient.unit ?? ""}`}>□ {[formatShoppingQuantity(ingredient), ingredient.name].filter(Boolean).join(" ")}</span>) : <span>Ingen ingredienser i ugeplanen.</span>}</div>
         <h2>Huskeliste</h2>
         <div className="print-shopping">{tasks.slice(0, 3).map((item) => <span key={item.id}>□ {item.title}</span>)}</div>
       </article>
@@ -1293,6 +1297,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   const [notifications, setNotifications] = useState<HouseholdNotification[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [mealPrintItems, setMealPrintItems] = useState<MealPlanItem[]>([]);
+  const [mealPrintWeekStart, setMealPrintWeekStart] = useState(mondayFor());
   const userId = user?.id;
   const visibleNavItems = navItems;
 
@@ -1360,7 +1365,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       userId ? loadFinanceTransactions(householdId) : Promise.resolve(demoFinance.transactions),
       loadDocuments(householdId),
       loadSubscriptions(householdId),
-    ]).then(([taskResult, shoppingResult, financeResult, financePeriodResult, transactionsResult, documentsResult, subscriptionsResult]) => {
+      loadMealPlan(householdId, mondayFor()),
+    ]).then(([taskResult, shoppingResult, financeResult, financePeriodResult, transactionsResult, documentsResult, subscriptionsResult, mealPlanResult]) => {
       if (!active) return;
       if (taskResult.error || shoppingResult.error) {
         setSyncState("error");
@@ -1383,6 +1389,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       setFinanceTransactions(transactionsResult);
       setHouseholdDocuments(documentsResult);
       setSubscriptions(subscriptionsResult);
+      setMealPrintItems(mealPlanResult.items);
+      setMealPrintWeekStart(mondayFor());
       setSyncState("synced");
     }).catch(() => { if (active) setSyncState("error"); });
     return () => { active = false; };
@@ -1716,7 +1724,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
           ) : null}
           {["documents", "tasks", "shopping"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} sampleMode={!householdId} /> : null}
           {view === "calendar" ? <CalendarView householdId={householdId} onSyncState={setSyncState} userId={user?.id} /> : null}
-          {view === "meals" ? <MealPlanView householdId={householdId} onItemsChange={setMealPrintItems} onShoppingChanged={() => void refreshShopping()} onSyncState={setSyncState} userId={user?.id} /> : null}
+          {view === "meals" ? <MealPlanView householdId={householdId} onItemsChange={(items, weekStart) => { setMealPrintItems(items); setMealPrintWeekStart(weekStart); }} onShoppingChanged={() => void refreshShopping()} onSyncState={setSyncState} userId={user?.id} /> : null}
           {view === "household" ? <HouseholdView householdId={householdId} householdName={householdName} onSyncState={setSyncState} user={user} /> : null}
           {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
@@ -1732,7 +1740,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       {subscriptionOpen ? <SubscriptionModal documents={householdDocuments} initial={editingSubscription} onClose={() => { setSubscriptionOpen(false); setEditingSubscription(null); }} onDelete={removeSubscription} onOpenDocument={openDocument} onSave={saveSubscription} transactions={financeTransactions} /> : null}
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = Boolean(await saveFinanceCategory(name, categoryType)); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
-      <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} mealItems={mealPrintItems} />
+      <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} mealItems={mealPrintItems} mealWeekStart={mealPrintWeekStart} sampleMode={!householdId} />
     </div>
   );
 }
