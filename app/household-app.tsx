@@ -18,7 +18,6 @@ import {
   Menu,
   Monitor,
   Moon,
-  PanelsTopLeft,
   Palette,
   Plus,
   Search,
@@ -36,6 +35,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import {
   calendarItems,
@@ -100,6 +100,11 @@ import {
   type TemplateName,
 } from "./product-config";
 import { getSupabaseBrowserClient } from "./supabase-client";
+import { CalendarView } from "./calendar-view";
+import { HouseholdView } from "./household-view";
+import { MealPlanView } from "./meal-plan-view";
+import type { MealPlanItem } from "./meal-plan-data";
+import { loadNotifications, markNotificationRead, type HouseholdNotification } from "./notifications-data";
 
 type View =
   | "overview"
@@ -648,7 +653,7 @@ function BudgetView({
 
   const transactionRow = (row: FinancePeriodTransactionRow) => (
     <tr className="budget-entry-row budget-transaction-row" key={row.transaction.id}>
-      <th><button className="budget-transaction-link" onClick={() => onEditTransaction(row.transaction)} type="button"><strong>{row.transaction.merchant}</strong><small>{transactionRecurrenceLabel(row.transaction.recurrence)}</small></button></th>
+      <th><button className="budget-transaction-link" onClick={() => onEditTransaction(row.transaction)} type="button"><strong>{row.transaction.merchant}</strong></button></th>
       {financePeriod.months.map((month, monthIndex) => <td key={month.key}>{renderValue(row, monthIndex)}</td>)}
       <td>{budgetNumber.format(sumValues(row.values))}</td>
     </tr>
@@ -679,7 +684,12 @@ function BudgetView({
 
       <section className="budget-table-panel">
         <div className="budget-table-scroll">
-          <table className="budget-sheet" style={{ minWidth: Math.max(760, 190 + (financePeriod.months.length + 1) * 84) }}>
+          <table className="budget-sheet">
+            <colgroup>
+              <col className="budget-name-column" />
+              {financePeriod.months.map((month) => <col className="budget-month-column" key={month.key} />)}
+              <col className="budget-total-column" />
+            </colgroup>
             <thead><tr><th>Kategori / post</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead>
             <tbody>
               <tr className="budget-group-row"><th><span className="budget-group-label">Indtægter<button aria-label="Tilføj indtægt" className="budget-inline-add" onClick={() => onAddTransaction("income")} title="Tilføj indtægt" type="button"><Plus size={14} /></button></span></th>{financePeriod.incomeValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.incomeValues))}</td></tr>
@@ -1014,15 +1024,12 @@ function TransactionModal({
               }} type="button">{addingCategory ? "Opretter…" : "Opret og vælg"}</button>
             </div> : null}
           </div> : null}
-          <label className="wide"><span className="field-label-with-icon"><Repeat2 size={15} />Gentagelse</span><select onChange={(event) => { const value = event.target.value as TransactionRecurrence; setRecurrence(value); if (value === "once") setRecurrenceEndOn(""); }} value={recurrence}><option value="once">Kun denne måned</option><option value="monthly">Hver måned</option><option value="every_2_months">Hver anden måned</option><option value="quarterly">Hvert kvartal</option><option value="half_yearly">Hvert halve år</option></select><small>{recurrence === "once" ? "Posteringen gælder kun den valgte dato." : recurrenceEndOn ? "Serien stopper på den valgte dato." : "Fortsætter løbende uden slutdato."}</small></label>
-          {recurrence !== "once" ? <label className="wide">Sidste betaling <span className="optional-label">(valgfri)</span><input min={occurredOn} onChange={(event) => setRecurrenceEndOn(event.target.value)} type="date" value={recurrenceEndOn} /><small>Lad feltet stå tomt, hvis betalingen skal fortsætte.</small></label> : null}
-          {initial ? <label className="wide">Status<select onChange={(event) => setTransactionStatus(event.target.value as typeof transactionStatus)} value={transactionStatus}><option value="approved">Bogført</option><option value="scheduled">Planlagt</option></select></label> : null}
+          <label><span className="field-label-with-icon"><Repeat2 size={15} />Gentagelse</span><select onChange={(event) => { const value = event.target.value as TransactionRecurrence; setRecurrence(value); if (value === "once") setRecurrenceEndOn(""); }} value={recurrence}><option value="once">Kun denne måned</option><option value="monthly">Hver måned</option><option value="every_2_months">Hver anden måned</option><option value="quarterly">Hvert kvartal</option><option value="half_yearly">Hvert halve år</option></select><small>{recurrence === "once" ? "Kun den valgte dato." : recurrenceEndOn ? "Stopper på den valgte dato." : "Fortsætter uden slutdato."}</small></label>
+          {recurrence !== "once" ? <label>Sidste betaling <span className="optional-label">(valgfri)</span><input min={occurredOn} onChange={(event) => setRecurrenceEndOn(event.target.value)} type="date" value={recurrenceEndOn} /><small>Lad feltet stå tomt for løbende betaling.</small></label> : null}
+          {initial ? <label>Status<select onChange={(event) => setTransactionStatus(event.target.value as typeof transactionStatus)} value={transactionStatus}><option value="approved">Bogført</option><option value="scheduled">Planlagt</option></select></label> : null}
         </div>
-        {recurrence !== "once" ? <section className="transaction-schedule" aria-labelledby="transaction-schedule-title"><div><h3 id="transaction-schedule-title">Betalingsplan</h3><span>{occurrenceDates.length} viste betalinger</span></div><ol>{occurrenceDates.map((date) => <li key={date}><time dateTime={date}>{transactionDateLabel(date)}</time><span>{date <= new Date().toISOString().slice(0, 10) ? "Bogført" : "Planlagt"}</span><strong>{direction === "income" ? "+" : "−"}{amount ? currency.format(Number(amount.replace(",", ".")) || 0) : currency.format(0)}</strong></li>)}</ol>{!recurrenceEndOn ? <p>Serien fortsætter efter de viste betalinger, indtil du tilføjer en sidste betalingsdato.</p> : null}</section> : null}
-        <section className="document-link-section" aria-labelledby="transaction-documents-title">
-          <div><h3 id="transaction-documents-title"><Link2 size={16} />Tilknyttede dokumenter</h3><span>{linkedDocumentIds.length} valgt</span></div>
-          {documents.length ? <div className="document-link-list">{documents.map((document) => <div className="document-link-row" key={document.id}><label><input checked={linkedDocumentIds.includes(document.id)} onChange={(event) => setLinkedDocumentIds((ids) => event.target.checked ? [...new Set([...ids, document.id])] : ids.filter((id) => id !== document.id))} type="checkbox" /><span><strong>{document.title}</strong><small>{documentKindLabel(document.kind)}</small></span></label>{initial && linkedDocumentIds.includes(document.id) ? <button aria-label={`Åbn ${document.title}`} onClick={() => void onOpenDocument(document)} type="button"><ExternalLink size={14} /></button> : null}</div>)}</div> : <p>Upload først et dokument under Dokumenter, og tilknyt det derefter her.</p>}
-        </section>
+        {recurrence !== "once" ? <details className="transaction-disclosure"><summary><span>Betalingsplan</span><small>{occurrenceDates.length} viste betalinger</small></summary><section className="transaction-schedule" aria-label="Betalingsplan"><ol>{occurrenceDates.map((date) => <li key={date}><time dateTime={date}>{transactionDateLabel(date)}</time><span>{date <= new Date().toISOString().slice(0, 10) ? "Bogført" : "Planlagt"}</span><strong>{direction === "income" ? "+" : "−"}{amount ? currency.format(Number(amount.replace(",", ".")) || 0) : currency.format(0)}</strong></li>)}</ol>{!recurrenceEndOn ? <p>Serien fortsætter, indtil du tilføjer en sidste betalingsdato.</p> : null}</section></details> : null}
+        <details className="transaction-disclosure"><summary><span><Link2 size={15} />Tilknyttede dokumenter</span><small>{linkedDocumentIds.length} valgt</small></summary><section className="document-link-section" aria-label="Tilknyttede dokumenter">{documents.length ? <div className="document-link-list">{documents.map((document) => <div className="document-link-row" key={document.id}><label><input checked={linkedDocumentIds.includes(document.id)} onChange={(event) => setLinkedDocumentIds((ids) => event.target.checked ? [...new Set([...ids, document.id])] : ids.filter((id) => id !== document.id))} type="checkbox" /><span><strong>{document.title}</strong><small>{documentKindLabel(document.kind)}</small></span></label>{initial && linkedDocumentIds.includes(document.id) ? <button aria-label={`Åbn ${document.title}`} onClick={() => void onOpenDocument(document)} type="button"><ExternalLink size={14} /></button> : null}</div>)}</div> : <p>Upload først et dokument under Dokumenter, og tilknyt det derefter her.</p>}</section></details>
         {error ? <p className="modal-error" role="alert">{error}</p> : null}
         <div className="transaction-modal-actions">
           {initial ? <button className="danger-button" disabled={busy} onClick={async () => { if (!window.confirm(`Slet posteringen “${initial.merchant}”?`)) return; setBusy(true); const deleted = await onDelete(initial.id); if (!deleted) setError("Posteringen kunne ikke slettes. Prøv igen."); setBusy(false); }} type="button"><Trash2 size={16} />Slet</button> : null}
@@ -1171,7 +1178,7 @@ function DocumentUploadModal({
   );
 }
 
-function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; financePeriod: FinancePeriodSnapshot; householdName: string }) {
+function PrintSheets({ tasks, shopping, financePeriod, householdName, mealItems }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; financePeriod: FinancePeriodSnapshot; householdName: string; mealItems: MealPlanItem[] }) {
   const incomeRows = financePeriod.transactionRows.filter((row) => row.transaction.direction === "income");
   const expenseGroups = financePeriod.categories.map((category) => ({ category, rows: financePeriod.transactionRows.filter((row) => row.transaction.direction === "expense" && (category.id === "uncategorized" ? !row.transaction.categoryId : row.transaction.categoryId === category.id)) }));
   return (
@@ -1193,8 +1200,8 @@ function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks:
         </tbody></table>
       </article>
       <article className="print-sheet meal-print">
-        <header><span>{productConfig.name}</span><h1>Madplan · Uge 21</h1><p>7 dage · 4 personer</p></header>
-        <div className="print-meals">{meals.map(([day, meal]) => <div key={day}><strong>{day}</strong><span>{meal}</span></div>)}</div>
+        <header><span>{productConfig.name}</span><h1>Madplan</h1><p>{mealItems.length} planlagte måltider</p></header>
+        <div className="print-meals">{mealItems.length ? mealItems.map((item) => <div key={item.id}><strong>{["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag", "Lørdag", "Søndag"][item.dayOfWeek - 1]}</strong><span>{item.title} · {item.servings} portioner</span>{item.ingredients.length ? <small>{item.ingredients.map((ingredient) => `${ingredient.quantity ?? ""} ${ingredient.unit ?? ""} ${ingredient.name}`.trim()).join(", ")}</small> : null}</div>) : meals.map(([day, meal]) => <div key={day}><strong>{day}</strong><span>{meal}</span></div>)}</div>
         <h2>Indkøbsliste</h2>
         <div className="print-shopping">{shopping.map((item) => <span key={item.id}>□ {item.title}</span>)}</div>
         <h2>Huskeliste</h2>
@@ -1283,6 +1290,9 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [documentUploadOpen, setDocumentUploadOpen] = useState(false);
   const [printTarget, setPrintTarget] = useState<"budget" | "meal" | null>(null);
+  const [notifications, setNotifications] = useState<HouseholdNotification[]>([]);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [mealPrintItems, setMealPrintItems] = useState<MealPlanItem[]>([]);
   const userId = user?.id;
   const visibleNavItems = navItems;
 
@@ -1386,6 +1396,13 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
     return () => window.clearTimeout(refreshDemoPeriod);
   }, [budgetPeriodMode, budgetYear, householdId]);
 
+  useEffect(() => {
+    if (!householdId || !userId) return;
+    let active = true;
+    loadNotifications(householdId, userId).then((items) => { if (active) setNotifications(items); }).catch(() => { if (active) setSyncState("error"); });
+    return () => { active = false; };
+  }, [householdId, userId]);
+
   const selectedCategory = finance.categories.find((category) => category.id === selectedCategoryId) ?? null;
   const title = useMemo(() => visibleNavItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view, visibleNavItems]);
   const displayName = user?.displayName || "Anders";
@@ -1417,6 +1434,12 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       setShopping((items) => items.map((item) => item.id === id ? current : item));
       setSyncState("error");
     } else setSyncState("synced");
+  };
+  const refreshShopping = async () => {
+    if (!householdId) return;
+    const { data, error } = await getSupabaseBrowserClient().from("shopping_items").select("id, title, quantity, completed_at").eq("household_id", householdId).order("created_at");
+    if (error) { setSyncState("error"); return; }
+    setShopping((data ?? []).map((item) => ({ id: item.id, title: item.title, meta: item.quantity ?? undefined, done: Boolean(item.completed_at) })));
   };
   const navigateFinance = (section: FinanceSection, categoryId: string | null = null) => {
     setView("finance");
@@ -1629,13 +1652,17 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   return (
     <div className="app-root" data-color-mode={resolvedAppearance} data-template={template} data-print-target={printTarget ?? "none"}>
       <aside className={`sidebar ${mobileMenu ? "mobile-open" : ""}`}>
-        <div className="brand"><span><PanelsTopLeft size={19} /></span><strong>{productConfig.name}</strong></div>
+        <div className="brand" title={productConfig.name}>
+          <Image alt="" height={44} priority src="/brand/hjemblik-mark-192.png?v=1" unoptimized width={44} />
+          <span className="sr-only">{productConfig.name}</span>
+        </div>
         <nav aria-label="Primær navigation">
           {visibleNavItems.map(([key, label, Icon]) => (
             <div className={key === "finance" ? "sidebar-nav-group" : ""} key={key}>
               <button aria-current={view === key ? "page" : undefined} className={view === key ? "active" : ""} onClick={() => navigate(key)} type="button"><Icon size={18} /><span>{label}</span></button>
               {key === "finance" && view === "finance" ? (
                 <div aria-label="Økonomi" className="sidebar-subnav">
+                  <button aria-current={financeSection === "overview" ? "page" : undefined} className={financeSection === "overview" ? "active" : ""} onClick={() => navigateFinance("overview")} type="button">Overblik</button>
                   <button aria-current={financeSection === "budget" ? "page" : undefined} className={financeSection === "budget" ? "active" : ""} onClick={() => navigateFinance("budget")} type="button">Budget</button>
                   <button aria-current={financeSection === "transactions" ? "page" : undefined} className={financeSection === "transactions" ? "active" : ""} onClick={() => navigateFinance("transactions")} type="button">Posteringer</button>
                   <button aria-current={financeSection === "subscriptions" ? "page" : undefined} className={financeSection === "subscriptions" ? "active" : ""} onClick={() => navigateFinance("subscriptions")} type="button">Abonnementer</button>
@@ -1669,7 +1696,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
             >
               {resolvedAppearance === "dark" ? <Sun size={19} /> : <Moon size={19} />}
             </button>
-            {actions.length ? <button aria-label={`${actions.length} notifikationer`} className="notification-button" type="button"><Bell size={19} /><b>{actions.length}</b></button> : null}
+            {actions.length || notifications.length ? <div className="notification-wrap"><button aria-label={`${actions.length + notifications.filter((item) => !item.readAt).length} notifikationer`} className="notification-button" onClick={() => setNotificationOpen((open) => !open)} type="button"><Bell size={19} />{actions.length + notifications.filter((item) => !item.readAt).length ? <b>{actions.length + notifications.filter((item) => !item.readAt).length}</b> : null}</button>{notificationOpen ? <section className="notification-center"><header><strong>Notifikationer</strong><span>{notifications.filter((item) => !item.readAt).length} ulæste</span></header>{notifications.length ? notifications.map((item) => <button className={item.readAt ? "read" : ""} key={item.id} onClick={() => { if (userId && !item.readAt) void markNotificationRead(item.id, userId).then(() => setNotifications((current) => current.map((entry) => entry.id === item.id ? { ...entry, readAt: new Date().toISOString() } : entry))); }} type="button"><strong>{item.title}</strong><span>{item.body || "Kalenderpåmindelse"}</span><time>{new Intl.DateTimeFormat("da-DK", { dateStyle: "short", timeStyle: "short" }).format(new Date(item.createdAt))}</time></button>) : <div className="empty-state"><Bell size={17} />Ingen notifikationer endnu</div>}</section> : null}</div> : null}
             {householdId ? <span className={`sync-status ${syncState}`}>{syncState === "loading" ? "Henter…" : syncState === "saving" ? "Gemmer…" : syncState === "error" ? "Synkronisering fejlede" : "Synkroniseret"}</span> : null}
             <button className="profile-button" type="button"><span>{initials}</span><strong>{firstName}</strong><ChevronDown size={14} /></button>
           </div>
@@ -1679,12 +1706,6 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
           {view === "overview" ? <Overview finance={finance} actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} /> : null}
           {view === "finance" ? (
             <div className="finance-area">
-              <div className="finance-tabs" role="tablist" aria-label="Økonomi">
-                <button aria-selected={financeSection === "overview"} className={financeSection === "overview" ? "active" : ""} onClick={() => navigateFinance("overview")} role="tab" type="button">Overblik</button>
-                <button aria-selected={financeSection === "budget"} className={financeSection === "budget" ? "active" : ""} onClick={() => navigateFinance("budget")} role="tab" type="button">Budget</button>
-                <button aria-selected={financeSection === "transactions"} className={financeSection === "transactions" ? "active" : ""} onClick={() => navigateFinance("transactions")} role="tab" type="button">Posteringer</button>
-                <button aria-selected={financeSection === "subscriptions"} className={financeSection === "subscriptions" ? "active" : ""} onClick={() => navigateFinance("subscriptions")} role="tab" type="button">Abonnementer</button>
-              </div>
               {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} /> : null}
               {financeSection === "budget" ? <BudgetView financePeriod={financePeriod} onAddCategory={async (name, categoryType) => Boolean(await saveFinanceCategory(name, categoryType))} onAddTransaction={(direction, categoryId) => openNewTransaction(categoryId ?? null, direction)} onEditTransaction={openTransaction} onExport={() => exportPdf("budget")} onOccurrenceChange={saveTransactionOccurrence} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onPeriodModeChange={setBudgetPeriodMode} onYearChange={setBudgetYear} periodMode={budgetPeriodMode} selectedYear={budgetYear} /> : null}
               {financeSection === "transactions" ? <TransactionsView categories={finance.categories} onAdd={() => openNewTransaction()} onDelete={(transaction) => removeTransaction(transaction.id)} onEdit={openTransaction} transactions={financeTransactions} /> : null}
@@ -1693,7 +1714,10 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
               {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
             </div>
           ) : null}
-          {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} sampleMode={!householdId} /> : null}
+          {["documents", "tasks", "shopping"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} sampleMode={!householdId} /> : null}
+          {view === "calendar" ? <CalendarView householdId={householdId} onSyncState={setSyncState} userId={user?.id} /> : null}
+          {view === "meals" ? <MealPlanView householdId={householdId} onItemsChange={setMealPrintItems} onShoppingChanged={() => void refreshShopping()} onSyncState={setSyncState} userId={user?.id} /> : null}
+          {view === "household" ? <HouseholdView householdId={householdId} householdName={householdName} onSyncState={setSyncState} user={user} /> : null}
           {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
       </div>
@@ -1708,7 +1732,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       {subscriptionOpen ? <SubscriptionModal documents={householdDocuments} initial={editingSubscription} onClose={() => { setSubscriptionOpen(false); setEditingSubscription(null); }} onDelete={removeSubscription} onOpenDocument={openDocument} onSave={saveSubscription} transactions={financeTransactions} /> : null}
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = Boolean(await saveFinanceCategory(name, categoryType)); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
-      <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} />
+      <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} mealItems={mealPrintItems} />
     </div>
   );
 }

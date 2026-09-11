@@ -1,0 +1,12 @@
+create index calendar_event_exceptions_created_by_idx on public.calendar_event_exceptions(created_by);
+create index calendar_event_exceptions_event_household_idx on public.calendar_event_exceptions(event_id, household_id);
+create index calendar_event_reminders_event_household_idx on public.calendar_event_reminders(event_id, household_id);
+create index calendar_event_reminders_household_idx on public.calendar_event_reminders(household_id);
+create index calendar_events_assigned_to_idx on public.calendar_events(assigned_to) where assigned_to is not null;
+create index calendar_events_created_by_idx on public.calendar_events(created_by);
+create index calendar_reminder_deliveries_household_idx on public.calendar_reminder_deliveries(household_id);
+create index calendar_reminder_deliveries_user_idx on public.calendar_reminder_deliveries(user_id);
+create index household_invitations_invited_by_idx on public.household_invitations(invited_by);
+create index meal_plan_ingredients_item_household_idx on public.meal_plan_ingredients(meal_plan_item_id, household_id);
+create index notifications_event_idx on public.notifications(event_id) where event_id is not null;
+create index notifications_household_idx on public.notifications(household_id);

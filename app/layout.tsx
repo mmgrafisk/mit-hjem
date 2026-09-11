@@ -15,6 +15,10 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title,
     description,
+    icons: {
+      icon: "/brand/hjemblik-mark-192.png",
+      apple: "/brand/hjemblik-mark-192.png",
+    },
     openGraph: { title, description, images: [{ url: image, width: 1729, height: 907 }] },
     twitter: { card: "summary_large_image", title, description, images: [image] },
   };

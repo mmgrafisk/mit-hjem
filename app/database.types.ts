@@ -160,6 +160,30 @@ export type Database = {
           },
         ]
       }
+      calendar_events: {
+        Row: { all_day: boolean; assigned_to: string | null; created_at: string; created_by: string; description: string | null; ends_at: string; household_id: string; id: string; location: string | null; recurrence: string; recurrence_end_on: string | null; recurrence_interval: number; starts_at: string; timezone: string; title: string; updated_at: string }
+        Insert: { all_day?: boolean; assigned_to?: string | null; created_at?: string; created_by: string; description?: string | null; ends_at: string; household_id: string; id?: string; location?: string | null; recurrence?: string; recurrence_end_on?: string | null; recurrence_interval?: number; starts_at: string; timezone?: string; title: string; updated_at?: string }
+        Update: { all_day?: boolean; assigned_to?: string | null; created_at?: string; created_by?: string; description?: string | null; ends_at?: string; household_id?: string; id?: string; location?: string | null; recurrence?: string; recurrence_end_on?: string | null; recurrence_interval?: number; starts_at?: string; timezone?: string; title?: string; updated_at?: string }
+        Relationships: [{ foreignKeyName: "calendar_events_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] }]
+      }
+      calendar_event_exceptions: {
+        Row: { cancelled: boolean; created_at: string; created_by: string; description: string | null; ends_at: string | null; event_id: string; household_id: string; id: string; location: string | null; occurrence_start: string; starts_at: string | null; title: string | null; updated_at: string }
+        Insert: { cancelled?: boolean; created_at?: string; created_by: string; description?: string | null; ends_at?: string | null; event_id: string; household_id: string; id?: string; location?: string | null; occurrence_start: string; starts_at?: string | null; title?: string | null; updated_at?: string }
+        Update: { cancelled?: boolean; created_at?: string; created_by?: string; description?: string | null; ends_at?: string | null; event_id?: string; household_id?: string; id?: string; location?: string | null; occurrence_start?: string; starts_at?: string | null; title?: string | null; updated_at?: string }
+        Relationships: [
+          { foreignKeyName: "calendar_event_exceptions_event_id_household_id_fkey"; columns: ["event_id", "household_id"]; isOneToOne: false; referencedRelation: "calendar_events"; referencedColumns: ["id", "household_id"] },
+          { foreignKeyName: "calendar_event_exceptions_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] },
+        ]
+      }
+      calendar_event_reminders: {
+        Row: { channels: string[]; created_at: string; event_id: string; household_id: string; id: string; minutes_before: number; updated_at: string }
+        Insert: { channels?: string[]; created_at?: string; event_id: string; household_id: string; id?: string; minutes_before?: number; updated_at?: string }
+        Update: { channels?: string[]; created_at?: string; event_id?: string; household_id?: string; id?: string; minutes_before?: number; updated_at?: string }
+        Relationships: [
+          { foreignKeyName: "calendar_event_reminders_event_id_household_id_fkey"; columns: ["event_id", "household_id"]; isOneToOne: false; referencedRelation: "calendar_events"; referencedColumns: ["id", "household_id"] },
+          { foreignKeyName: "calendar_event_reminders_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] },
+        ]
+      }
       documents: {
         Row: {
           created_at: string
@@ -404,7 +428,9 @@ export type Database = {
           household_id: string
           id: string
           meal_plan_id: string
+          meal_slot: number
           notes: string | null
+          servings: number
           title: string
           updated_at: string
         }
@@ -415,7 +441,9 @@ export type Database = {
           household_id: string
           id?: string
           meal_plan_id: string
+          meal_slot?: number
           notes?: string | null
+          servings?: number
           title: string
           updated_at?: string
         }
@@ -426,7 +454,9 @@ export type Database = {
           household_id?: string
           id?: string
           meal_plan_id?: string
+          meal_slot?: number
           notes?: string | null
+          servings?: number
           title?: string
           updated_at?: string
         }
@@ -443,6 +473,51 @@ export type Database = {
             columns: ["meal_plan_id", "household_id"]
             isOneToOne: false
             referencedRelation: "meal_plans"
+            referencedColumns: ["id", "household_id"]
+          },
+        ]
+      }
+      meal_plan_ingredients: {
+        Row: {
+          created_at: string
+          household_id: string
+          id: string
+          meal_plan_item_id: string
+          name: string
+          quantity: number | null
+          unit: string | null
+        }
+        Insert: {
+          created_at?: string
+          household_id: string
+          id?: string
+          meal_plan_item_id: string
+          name: string
+          quantity?: number | null
+          unit?: string | null
+        }
+        Update: {
+          created_at?: string
+          household_id?: string
+          id?: string
+          meal_plan_item_id?: string
+          name?: string
+          quantity?: number | null
+          unit?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meal_plan_ingredients_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meal_plan_ingredients_meal_plan_item_id_household_id_fkey"
+            columns: ["meal_plan_item_id", "household_id"]
+            isOneToOne: false
+            referencedRelation: "meal_plan_items"
             referencedColumns: ["id", "household_id"]
           },
         ]
@@ -480,6 +555,30 @@ export type Database = {
             referencedRelation: "households"
             referencedColumns: ["id"]
           },
+        ]
+      }
+      notification_preferences: {
+        Row: { email_enabled: boolean; in_app_enabled: boolean; updated_at: string; user_id: string }
+        Insert: { email_enabled?: boolean; in_app_enabled?: boolean; updated_at?: string; user_id: string }
+        Update: { email_enabled?: boolean; in_app_enabled?: boolean; updated_at?: string; user_id?: string }
+        Relationships: []
+      }
+      notifications: {
+        Row: { body: string | null; created_at: string; event_id: string | null; household_id: string; id: string; occurrence_start: string | null; read_at: string | null; title: string; user_id: string }
+        Insert: { body?: string | null; created_at?: string; event_id?: string | null; household_id: string; id?: string; occurrence_start?: string | null; read_at?: string | null; title: string; user_id: string }
+        Update: { body?: string | null; created_at?: string; event_id?: string | null; household_id?: string; id?: string; occurrence_start?: string | null; read_at?: string | null; title?: string; user_id?: string }
+        Relationships: [
+          { foreignKeyName: "notifications_event_id_fkey"; columns: ["event_id"]; isOneToOne: false; referencedRelation: "calendar_events"; referencedColumns: ["id"] },
+          { foreignKeyName: "notifications_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] },
+        ]
+      }
+      calendar_reminder_deliveries: {
+        Row: { attempted_at: string | null; channel: string; created_at: string; error_message: string | null; event_id: string; household_id: string; id: string; occurrence_start: string; sent_at: string | null; status: string; user_id: string }
+        Insert: { attempted_at?: string | null; channel: string; created_at?: string; error_message?: string | null; event_id: string; household_id: string; id?: string; occurrence_start: string; sent_at?: string | null; status?: string; user_id: string }
+        Update: { attempted_at?: string | null; channel?: string; created_at?: string; error_message?: string | null; event_id?: string; household_id?: string; id?: string; occurrence_start?: string; sent_at?: string | null; status?: string; user_id?: string }
+        Relationships: [
+          { foreignKeyName: "calendar_reminder_deliveries_event_id_fkey"; columns: ["event_id"]; isOneToOne: false; referencedRelation: "calendar_events"; referencedColumns: ["id"] },
+          { foreignKeyName: "calendar_reminder_deliveries_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] },
         ]
       }
       profiles: {
@@ -672,6 +771,53 @@ export type Database = {
           },
         ]
       }
+      household_invitations: {
+        Row: {
+          accepted_at: string | null
+          created_at: string
+          email: string
+          expires_at: string
+          household_id: string
+          id: string
+          invited_by: string
+          revoked_at: string | null
+          token_hash: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          created_at?: string
+          email: string
+          expires_at?: string
+          household_id: string
+          id?: string
+          invited_by: string
+          revoked_at?: string | null
+          token_hash: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_at?: string | null
+          created_at?: string
+          email?: string
+          expires_at?: string
+          household_id?: string
+          id?: string
+          invited_by?: string
+          revoked_at?: string | null
+          token_hash?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "household_invitations_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       transaction_occurrence_overrides: {
         Row: {
           amount: number | null
@@ -774,6 +920,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      accept_household_invitation: {
+        Args: { target_token_hash: string }
+        Returns: string
+      }
       add_budget_category: {
         Args: {
           p_budget_ids: string[]

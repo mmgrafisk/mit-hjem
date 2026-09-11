@@ -1,11 +1,13 @@
 "use client";
 
-import { CheckCircle2, LoaderCircle, LockKeyhole, Mail, Moon, PanelsTopLeft, Sun } from "lucide-react";
+import { CheckCircle2, LoaderCircle, LockKeyhole, Mail, Moon, Sun } from "lucide-react";
+import Image from "next/image";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { HouseholdApp } from "./household-app";
 import { productConfig } from "./product-config";
 import { getSupabaseBrowserClient, type PublicSupabaseConfig } from "./supabase-client";
+import { acceptHouseholdInvitation } from "./household-data";
 
 type AuthMode = "login" | "signup";
 type Household = { id: string; name: string };
@@ -17,8 +19,9 @@ type AuthGateProps = {
   supabaseConfig: PublicSupabaseConfig | null;
 };
 
-function authRedirectUrl(appUrl: string | null) {
-  return new URL("/?auth=confirmed", appUrl || window.location.origin).toString();
+function authRedirectUrl(appUrl: string | null, initialPath?: string) {
+  const destination = initialPath?.startsWith("/invitation/accept") ? initialPath : "/?auth=confirmed";
+  return new URL(destination, appUrl || window.location.origin).toString();
 }
 
 function errorMessage(reason: unknown, fallback: string) {
@@ -113,7 +116,7 @@ async function ensureHousehold(user: User): Promise<Household> {
 function LoadingScreen({ label = "Åbner dit hjem…" }: { label?: string }) {
   return (
     <main className="auth-shell auth-loading">
-      <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
+      <div className="auth-brand"><Image alt="" height={42} priority src="/brand/hjemblik-mark-192.png?v=1" unoptimized width={42} /><strong>{productConfig.name}</strong></div>
       <LoaderCircle className="auth-spinner" size={28} />
       <p>{label}</p>
     </main>
@@ -124,7 +127,7 @@ function ConfigurationErrorScreen() {
   return (
     <main className="auth-shell" data-color-mode="dark">
       <section className="auth-card auth-error-card">
-        <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
+        <div className="auth-brand"><Image alt="" height={42} priority src="/brand/hjemblik-mark-192.png?v=1" unoptimized width={42} /><strong>{productConfig.name}</strong></div>
         <div className="auth-copy">
           <small>FORBINDELSESFEJL</small>
           <h1>Konfigurationen til login mangler</h1>
@@ -150,6 +153,10 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
   const [authLinkError] = useState(() => typeof window === "undefined" ? null : readAuthLinkError());
   const [error, setError] = useState<string | null>(authLinkError);
   const [dark, setDark] = useState(false);
+  const invitationToken = useMemo(() => {
+    if (!initialPath?.startsWith("/invitation/accept")) return null;
+    return new URL(initialPath, "https://hjemblik.local").searchParams.get("token");
+  }, [initialPath]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -192,13 +199,13 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
   useEffect(() => {
     if (!session?.user) return;
     let active = true;
-    ensureHousehold(session.user)
+    (invitationToken ? acceptHouseholdInvitation(invitationToken).then(() => { window.history.replaceState(null, "", "/husstand"); return ensureHousehold(session.user); }) : ensureHousehold(session.user))
       .then((value) => { if (active) setHousehold(value); })
       .catch((reason: unknown) => {
         if (active) setError(errorMessage(reason, "Dit hjem kunne ikke åbnes."));
       });
     return () => { active = false; };
-  }, [session]);
+  }, [session, invitationToken]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -210,7 +217,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { full_name: fullName.trim() }, emailRedirectTo: authRedirectUrl(appUrl) },
+          options: { data: { full_name: fullName.trim() }, emailRedirectTo: authRedirectUrl(appUrl, initialPath) },
         });
         if (signUpError) throw signUpError;
         if (!data.session) {
@@ -241,7 +248,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
       const { error: resendError } = await supabase.auth.resend({
         type: "signup",
         email: trimmedEmail,
-        options: { emailRedirectTo: authRedirectUrl(appUrl) },
+        options: { emailRedirectTo: authRedirectUrl(appUrl, initialPath) },
       });
       if (resendError) throw resendError;
       setMessage("Et nyt bekræftelseslink er sendt. Brug altid det nyeste link i din indbakke.");
@@ -259,7 +266,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
     return (
       <main className="auth-shell" data-color-mode={dark ? "dark" : "light"}>
         <section className="auth-card auth-error-card">
-          <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
+          <div className="auth-brand"><Image alt="" height={42} priority src="/brand/hjemblik-mark-192.png?v=1" unoptimized width={42} /><strong>{productConfig.name}</strong></div>
           <div className="auth-copy"><small>FORBINDELSESFEJL</small><h1>Dit hjem kunne ikke åbnes</h1><p>{error}</p></div>
           <button className="auth-submit" onClick={() => window.location.reload()} type="button">Prøv igen</button>
           <button className="auth-secondary" onClick={() => void supabase.auth.signOut()} type="button">Log ud</button>
@@ -272,7 +279,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
       <HouseholdApp
         householdId={household.id}
         householdName={household.name}
-        initialPath={initialPath}
+        initialPath={invitationToken ? "/husstand" : initialPath}
         onSignOut={async () => { await supabase.auth.signOut(); }}
         user={{ id: session.user.id, email: session.user.email ?? "", displayName: userName(session.user) }}
       />
@@ -285,7 +292,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
         {dark ? <Sun size={20} /> : <Moon size={20} />}
       </button>
       <section className="auth-card">
-        <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
+        <div className="auth-brand"><Image alt="" height={42} priority src="/brand/hjemblik-mark-192.png?v=1" unoptimized width={42} /><strong>{productConfig.name}</strong></div>
         <div className="auth-copy">
           <small>HELE HUSHOLDNINGEN ÉT STED</small>
           <h1>{mode === "login" ? "Velkommen hjem" : "Opret dit hjem"}</h1>
@@ -311,6 +318,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
 }
 
 export function AuthGate({ appUrl, initialPath, localPreview = false, supabaseConfig }: AuthGateProps) {
+  if (localPreview) return <HouseholdApp initialPath={initialPath} />;
   if (!supabaseConfig) return <ConfigurationErrorScreen />;
   return <ConfiguredAuthGate appUrl={appUrl} initialPath={initialPath} localPreview={localPreview} supabaseConfig={supabaseConfig} />;
 }
