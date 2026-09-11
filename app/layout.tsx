@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
 
-const title = "Mit hjem — økonomi og hverdag samlet";
+const title = "Hjemblik — økonomi og hverdag samlet";
 const description =
   "Et samlet overblik over husholdningens økonomi, dokumenter, opgaver, indkøb og madplan.";
 

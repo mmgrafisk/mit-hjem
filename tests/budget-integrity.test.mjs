@@ -29,11 +29,14 @@ test("transactions expose correction and deletion instead of insert-only behavio
   assert.match(app, /Slet posteringen/);
 });
 
-test("authenticated navigation does not present demo household data as real", async () => {
+test("authenticated navigation exposes real modules without presenting demo household data as real", async () => {
   const app = await readFile(appPath, "utf8");
   assert.match(app, /useState\(householdId \? \[\] : initialActions\)/);
-  assert.match(app, /key !== "calendar" && key !== "meals"/);
-  assert.match(app, /householdDocuments\.length/);
+  assert.match(app, /sampleMode=\{!householdId\}/);
+  assert.match(app, /sampleMode \? calendarItems : \[\]/);
+  assert.match(app, /sampleMode \? meals : \[\]/);
+  assert.doesNotMatch(app, /key !== "calendar" && key !== "meals"/);
+  assert.match(app, /useState<HouseholdDocument\[\]>\(householdId \? \[\] : demoDocuments\)/);
   assert.match(app, /member\.email/);
   assert.doesNotMatch(app, /Anders Sørensen/);
 });

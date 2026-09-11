@@ -1,5 +1,5 @@
 export const productConfig = {
-  name: "Mit hjem",
+  name: "Hjemblik",
   defaultTemplate: "command" as const,
   templates: {
     command: {

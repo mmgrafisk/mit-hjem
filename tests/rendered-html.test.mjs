@@ -28,16 +28,16 @@ async function render(runtimeEnv = defaultRuntimeEnv) {
   }
 }
 
-test("server-renders the authenticated Mit hjem entry point", async () => {
+test("server-renders the authenticated Hjemblik entry point", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<html lang="da">/i);
-  assert.match(html, /<title>Mit hjem — økonomi og hverdag samlet<\/title>/i);
+  assert.match(html, /<title>Hjemblik — økonomi og hverdag samlet<\/title>/i);
   assert.match(html, /auth-shell auth-loading/);
-  assert.match(html, /Mit hjem/);
+  assert.match(html, /Hjemblik/);
   assert.match(html, /AuthGate/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });

@@ -1,9 +1,10 @@
 "use client";
 
-import { CheckCircle2, House, LoaderCircle, LockKeyhole, Mail, Moon, Sun } from "lucide-react";
+import { CheckCircle2, LoaderCircle, LockKeyhole, Mail, Moon, PanelsTopLeft, Sun } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { HouseholdApp } from "./household-app";
+import { productConfig } from "./product-config";
 import { getSupabaseBrowserClient, type PublicSupabaseConfig } from "./supabase-client";
 
 type AuthMode = "login" | "signup";
@@ -112,7 +113,7 @@ async function ensureHousehold(user: User): Promise<Household> {
 function LoadingScreen({ label = "Åbner dit hjem…" }: { label?: string }) {
   return (
     <main className="auth-shell auth-loading">
-      <div className="auth-brand"><span><House size={22} /></span><strong>Mit hjem</strong></div>
+      <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
       <LoaderCircle className="auth-spinner" size={28} />
       <p>{label}</p>
     </main>
@@ -123,7 +124,7 @@ function ConfigurationErrorScreen() {
   return (
     <main className="auth-shell" data-color-mode="dark">
       <section className="auth-card auth-error-card">
-        <div className="auth-brand"><span><House size={22} /></span><strong>Mit hjem</strong></div>
+        <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
         <div className="auth-copy">
           <small>FORBINDELSESFEJL</small>
           <h1>Konfigurationen til login mangler</h1>
@@ -258,7 +259,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
     return (
       <main className="auth-shell" data-color-mode={dark ? "dark" : "light"}>
         <section className="auth-card auth-error-card">
-          <div className="auth-brand"><span><House size={22} /></span><strong>Mit hjem</strong></div>
+          <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
           <div className="auth-copy"><small>FORBINDELSESFEJL</small><h1>Dit hjem kunne ikke åbnes</h1><p>{error}</p></div>
           <button className="auth-submit" onClick={() => window.location.reload()} type="button">Prøv igen</button>
           <button className="auth-secondary" onClick={() => void supabase.auth.signOut()} type="button">Log ud</button>
@@ -284,7 +285,7 @@ function ConfiguredAuthGate({ appUrl, initialPath, localPreview = false, supabas
         {dark ? <Sun size={20} /> : <Moon size={20} />}
       </button>
       <section className="auth-card">
-        <div className="auth-brand"><span><House size={22} /></span><strong>Mit hjem</strong></div>
+        <div className="auth-brand"><span><PanelsTopLeft size={22} /></span><strong>{productConfig.name}</strong></div>
         <div className="auth-copy">
           <small>HELE HUSHOLDNINGEN ÉT STED</small>
           <h1>{mode === "login" ? "Velkommen hjem" : "Opret dit hjem"}</h1>

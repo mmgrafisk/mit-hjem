@@ -35,3 +35,16 @@ test("every primary app area has a stable URL", async () => {
     assert.match(app, new RegExp(route.replaceAll("/", "\\/")));
   }
 });
+
+test("keeps the compact budget and complete household navigation discoverable", async () => {
+  const app = await readFile(appPath, "utf8");
+  assert.match(app, /className="sidebar-subnav"/);
+  assert.match(app, /navigateFinance\("budget"\)/);
+  assert.match(app, /navigateFinance\("transactions"\)/);
+  assert.match(app, /navigateFinance\("subscriptions"\)/);
+  assert.match(app, /\["calendar", "Kalender", CalendarDays\]/);
+  assert.match(app, /\["meals", "Madplan", UtensilsCrossed\]/);
+  assert.match(app, /className="budget-inline-add"/);
+  assert.doesNotMatch(app, /className="budget-add-row"/);
+  assert.doesNotMatch(app, /key === "documents" && householdDocuments\.length/);
+});

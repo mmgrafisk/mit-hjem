@@ -13,12 +13,12 @@ import {
   FileText,
   ExternalLink,
   Globe2,
-  House,
   LayoutDashboard,
   LogOut,
   Menu,
   Monitor,
   Moon,
+  PanelsTopLeft,
   Palette,
   Plus,
   Search,
@@ -430,6 +430,11 @@ function Overview({
 
 const budgetNumber = new Intl.NumberFormat("da-DK", { maximumFractionDigits: 2 });
 
+function parseBudgetNumber(value: string) {
+  const normalized = value.trim().replaceAll(" ", "").replaceAll(".", "").replace(",", ".");
+  return Number(normalized);
+}
+
 function sumValues(values: number[]) {
   return values.reduce((sum, value) => sum + value, 0);
 }
@@ -625,18 +630,18 @@ function BudgetView({
     return (
     <input
       aria-label={`${row.transaction.merchant} ${financePeriod.months[monthIndex].label}`}
-      defaultValue={value}
+      defaultValue={budgetNumber.format(value)}
+      inputMode="decimal"
       key={`${editRevision}-${row.transaction.id}-${occurredOn}-${value}`}
-      min="0"
       onBlur={(event) => {
-        const next = Number(event.target.value);
+        const next = parseBudgetNumber(event.target.value);
+        event.currentTarget.value = budgetNumber.format(isValidFinanceAmount(next) ? next : value);
         if (isValidFinanceAmount(next) && next !== value) askHowToApply({ row: { ...row, transaction: occurrenceTransaction }, occurredOn, monthLabel: financePeriod.months[monthIndex].label, value: next });
         else if (!isValidFinanceAmount(next)) setEditRevision((revision) => revision + 1);
       }}
-      onFocus={(event) => event.currentTarget.select()}
-      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditRevision((revision) => revision + 1); }}
-      step="0.01"
-      type="number"
+      onFocus={(event) => { event.currentTarget.value = String(value).replace(".", ","); event.currentTarget.select(); }}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.currentTarget.value = budgetNumber.format(value); event.currentTarget.blur(); } }}
+      type="text"
     />
     );
   };
@@ -674,19 +679,17 @@ function BudgetView({
 
       <section className="budget-table-panel">
         <div className="budget-table-scroll">
-          <table className="budget-sheet" style={{ minWidth: Math.max(860, 210 + (financePeriod.months.length + 1) * 96) }}>
+          <table className="budget-sheet" style={{ minWidth: Math.max(760, 190 + (financePeriod.months.length + 1) * 84) }}>
             <thead><tr><th>Kategori / post</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead>
             <tbody>
-              <tr className="budget-group-row"><th>Indtægter</th>{financePeriod.incomeValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.incomeValues))}</td></tr>
+              <tr className="budget-group-row"><th><span className="budget-group-label">Indtægter<button aria-label="Tilføj indtægt" className="budget-inline-add" onClick={() => onAddTransaction("income")} title="Tilføj indtægt" type="button"><Plus size={14} /></button></span></th>{financePeriod.incomeValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.incomeValues))}</td></tr>
               {incomeRows.map(transactionRow)}
-              <tr className="budget-add-row"><th><button onClick={() => onAddTransaction("income")} type="button"><Plus size={14} />Tilføj indtægt</button></th><td colSpan={financePeriod.months.length + 1} /></tr>
               <tr className="budget-group-row expense"><th>Udgifter</th>{financePeriod.expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.expenseValues))}</td></tr>
               {expenseGroups.flatMap(({ category, rows }) => {
                 const values = valuesForRows(rows);
                 return [
-                  <tr className="budget-category-group-row" key={`${category.id}-group`}><th>{category.editable ? <button className="budget-category-link" onClick={() => onOpenCategory(category.id)} type="button"><span className="budget-row-marker" style={{ background: category.color }} />{category.name}<ChevronRight size={14} /></button> : <span><span className="budget-row-marker" style={{ background: category.color }} />{category.name}</span>}</th>{values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(values))}</td></tr>,
+                  <tr className="budget-category-group-row" key={`${category.id}-group`}><th><span className="budget-category-cell">{category.editable ? <button className="budget-category-link" onClick={() => onOpenCategory(category.id)} type="button"><span className="budget-row-marker" style={{ background: category.color }} />{category.name}<ChevronRight size={14} /></button> : <span><span className="budget-row-marker" style={{ background: category.color }} />{category.name}</span>}{category.editable ? <button aria-label={`Tilføj postering i ${category.name}`} className="budget-inline-add" onClick={() => onAddTransaction("expense", category.id)} title={`Tilføj postering i ${category.name}`} type="button"><Plus size={14} /></button> : null}</span></th>{values.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(values))}</td></tr>,
                   ...rows.map(transactionRow),
-                  category.editable ? <tr className="budget-add-row" key={`${category.id}-add`}><th><button onClick={() => onAddTransaction("expense", category.id)} type="button"><Plus size={14} />Tilføj postering</button></th><td colSpan={financePeriod.months.length + 1} /></tr> : null,
                 ].filter(Boolean);
               })}
               <tr className="budget-total-row"><th>Udgifter i alt</th>{financePeriod.expenseValues.map((value, monthIndex) => <td key={financePeriod.months[monthIndex].key}>{budgetNumber.format(value)}</td>)}<td>{budgetNumber.format(sumValues(financePeriod.expenseValues))}</td></tr>
@@ -728,6 +731,7 @@ function CollectionView({
   openDocument,
   openAdd,
   member,
+  sampleMode,
 }: {
   view: Exclude<View, "overview" | "finance" | "settings">;
   tasks: ChecklistItem[];
@@ -739,6 +743,7 @@ function CollectionView({
   openDocument: (document: HouseholdDocument) => void | Promise<void>;
   openAdd: (kind: "task" | "shopping") => void;
   member?: { name: string; email: string };
+  sampleMode: boolean;
 }) {
   const [documentQuery, setDocumentQuery] = useState("");
   const labels: Record<typeof view, [string, string]> = {
@@ -751,6 +756,8 @@ function CollectionView({
   };
   const [, intro] = labels[view];
   const visibleDocuments = documents.filter((document) => `${document.title} ${documentKindLabel(document.kind)}`.toLocaleLowerCase("da-DK").includes(documentQuery.trim().toLocaleLowerCase("da-DK")));
+  const visibleCalendarItems = sampleMode ? calendarItems : [];
+  const visibleMeals = sampleMode ? meals : [];
 
   return (
     <div className="collection-page">
@@ -766,15 +773,15 @@ function CollectionView({
       ) : null}
       {view === "tasks" ? <Panel className="wide-panel collection-main"><div className="check-list large">{tasks.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleTask} />)}{tasks.length === 0 ? <div className="empty-state"><CheckSquare size={18} />Ingen opgaver endnu</div> : null}</div></Panel> : null}
       {view === "shopping" ? <Panel className="wide-panel collection-main"><div className="check-list large">{shopping.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleShopping} />)}{shopping.length === 0 ? <div className="empty-state"><ShoppingCart size={18} />Indkøbslisten er tom</div> : null}</div></Panel> : null}
-      {view === "calendar" ? <Panel className="wide-panel collection-main"><div className="calendar-list large">{calendarItems.map(([day, time, item, tone]) => <button type="button" key={`${day}-${time}`}><span className={`timeline-dot dot-${tone}`} /><time>{day}</time><b>{time}</b><span>{item}</span></button>)}</div></Panel> : null}
-      {view === "meals" ? <Panel className="wide-panel collection-main"><div className="meal-strip large">{meals.map(([day, meal, duration], index) => <button type="button" key={day}><small>{day}</small><span className={`meal-visual meal-${index + 1}`} /><strong>{meal}</strong><em>{duration}</em></button>)}</div></Panel> : null}
+      {view === "calendar" ? <Panel className="wide-panel collection-main"><div className="calendar-list large">{visibleCalendarItems.map(([day, time, item, tone]) => <button type="button" key={`${day}-${time}`}><span className={`timeline-dot dot-${tone}`} /><time>{day}</time><b>{time}</b><span>{item}</span></button>)}{visibleCalendarItems.length === 0 ? <div className="empty-state"><CalendarDays size={18} />Ingen aftaler endnu</div> : null}</div></Panel> : null}
+      {view === "meals" ? <Panel className="wide-panel collection-main"><div className="meal-strip large">{visibleMeals.map(([day, meal, duration], index) => <button type="button" key={day}><small>{day}</small><span className={`meal-visual meal-${index + 1}`} /><strong>{meal}</strong><em>{duration}</em></button>)}{visibleMeals.length === 0 ? <div className="empty-state"><UtensilsCrossed size={18} />Ingen måltider planlagt endnu</div> : null}</div></Panel> : null}
       {view === "household" ? (
         <div className="member-grid collection-main">
           {member ? <Panel><span className="member-avatar">{member.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><h2>{member.name}</h2><p>{member.email} · Ejer</p></Panel> : <div className="empty-state"><Users size={18} />Ingen medlemmer at vise</div>}
         </div>
       ) : null}
       <aside className="collection-aside">
-        <Panel><small>Overblik</small><strong className="aside-value">{view === "documents" ? documents.length : view === "tasks" ? tasks.filter((item) => !item.done).length : view === "shopping" ? shopping.filter((item) => !item.done).length : view === "calendar" ? calendarItems.length : view === "meals" ? meals.length : member ? 1 : 0}</strong><p>{view === "documents" ? "dokumenter i arkivet" : view === "tasks" ? "åbne opgaver" : view === "shopping" ? "varer mangler" : view === "calendar" ? "aftaler i visningen" : view === "meals" ? "dage planlagt" : "aktivt medlem"}</p></Panel>
+        <Panel><small>Overblik</small><strong className="aside-value">{view === "documents" ? documents.length : view === "tasks" ? tasks.filter((item) => !item.done).length : view === "shopping" ? shopping.filter((item) => !item.done).length : view === "calendar" ? visibleCalendarItems.length : view === "meals" ? visibleMeals.length : member ? 1 : 0}</strong><p>{view === "documents" ? "dokumenter i arkivet" : view === "tasks" ? "åbne opgaver" : view === "shopping" ? "varer mangler" : view === "calendar" ? "aftaler i visningen" : view === "meals" ? "dage planlagt" : "aktivt medlem"}</p></Panel>
         {view === "documents" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={openUpload} type="button"><Upload size={15} />Upload dokument</button><p className="aside-empty">Dokumenter kan nu forbindes med posteringer og abonnementer.</p></Panel> : null}
         {view === "tasks" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={() => openAdd("task")} type="button"><Plus size={15} />Ny opgave</button></Panel> : null}
         {view === "shopping" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={() => openAdd("shopping")} type="button"><Plus size={15} />Tilføj vare</button></Panel> : null}
@@ -1170,7 +1177,7 @@ function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks:
   return (
     <div className="print-sheets" aria-hidden="true">
       <article className="print-sheet budget-print">
-        <header><span>Mit hjem</span><h1>Budget · {financePeriodLabel(financePeriod)}</h1><p>{householdName}</p></header>
+        <header><span>{productConfig.name}</span><h1>Budget · {financePeriodLabel(financePeriod)}</h1><p>{householdName}</p></header>
         <div className="print-summary"><div><small>Indtægter</small><strong>{currency.format(sumValues(financePeriod.incomeValues))}</strong></div><div><small>Udgifter</small><strong>{currency.format(sumValues(financePeriod.expenseValues))}</strong></div><div><small>Til rådighed</small><strong>{currency.format(sumValues(financePeriod.availableValues))}</strong></div></div>
         <h2>Posteringer pr. måned</h2>
         <table className="print-budget-table"><thead><tr><th>Kategori / postering</th>{financePeriod.months.map((month) => <th key={month.key}>{month.label}</th>)}<th>{budgetPeriodTotalLabel(financePeriod.mode)}</th></tr></thead><tbody>
@@ -1186,7 +1193,7 @@ function PrintSheets({ tasks, shopping, financePeriod, householdName }: { tasks:
         </tbody></table>
       </article>
       <article className="print-sheet meal-print">
-        <header><span>Mit hjem</span><h1>Madplan · Uge 21</h1><p>7 dage · 4 personer</p></header>
+        <header><span>{productConfig.name}</span><h1>Madplan · Uge 21</h1><p>7 dage · 4 personer</p></header>
         <div className="print-meals">{meals.map(([day, meal]) => <div key={day}><strong>{day}</strong><span>{meal}</span></div>)}</div>
         <h2>Indkøbsliste</h2>
         <div className="print-shopping">{shopping.map((item) => <span key={item.id}>□ {item.title}</span>)}</div>
@@ -1277,7 +1284,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   const [documentUploadOpen, setDocumentUploadOpen] = useState(false);
   const [printTarget, setPrintTarget] = useState<"budget" | "meal" | null>(null);
   const userId = user?.id;
-  const visibleNavItems = useMemo(() => householdId ? navItems.filter(([key]) => key !== "calendar" && key !== "meals") : [...navItems], [householdId]);
+  const visibleNavItems = navItems;
 
   useEffect(() => {
     const restorePreferences = window.setTimeout(() => {
@@ -1622,9 +1629,20 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   return (
     <div className="app-root" data-color-mode={resolvedAppearance} data-template={template} data-print-target={printTarget ?? "none"}>
       <aside className={`sidebar ${mobileMenu ? "mobile-open" : ""}`}>
-        <div className="brand"><span><House size={19} /></span><strong>{productConfig.name}</strong><ChevronDown size={14} /></div>
+        <div className="brand"><span><PanelsTopLeft size={19} /></span><strong>{productConfig.name}</strong></div>
         <nav aria-label="Primær navigation">
-          {visibleNavItems.map(([key, label, Icon]) => <button aria-current={view === key ? "page" : undefined} className={view === key ? "active" : ""} key={key} onClick={() => navigate(key)} type="button"><Icon size={18} /><span>{label}</span>{key === "documents" && householdDocuments.length ? <b>{householdDocuments.length}</b> : null}</button>)}
+          {visibleNavItems.map(([key, label, Icon]) => (
+            <div className={key === "finance" ? "sidebar-nav-group" : ""} key={key}>
+              <button aria-current={view === key ? "page" : undefined} className={view === key ? "active" : ""} onClick={() => navigate(key)} type="button"><Icon size={18} /><span>{label}</span></button>
+              {key === "finance" && view === "finance" ? (
+                <div aria-label="Økonomi" className="sidebar-subnav">
+                  <button aria-current={financeSection === "budget" ? "page" : undefined} className={financeSection === "budget" ? "active" : ""} onClick={() => navigateFinance("budget")} type="button">Budget</button>
+                  <button aria-current={financeSection === "transactions" ? "page" : undefined} className={financeSection === "transactions" ? "active" : ""} onClick={() => navigateFinance("transactions")} type="button">Posteringer</button>
+                  <button aria-current={financeSection === "subscriptions" ? "page" : undefined} className={financeSection === "subscriptions" ? "active" : ""} onClick={() => navigateFinance("subscriptions")} type="button">Abonnementer</button>
+                </div>
+              ) : null}
+            </div>
+          ))}
         </nav>
         <div className="sidebar-bottom">
           <button aria-current={view === "household" ? "page" : undefined} className={view === "household" ? "active" : ""} onClick={() => navigate("household")} type="button"><Users size={18} /><span>{householdName}</span><small>{user ? "Husstand" : "4 medlemmer"}</small></button>
@@ -1675,7 +1693,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
               {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
             </div>
           ) : null}
-          {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} /> : null}
+          {!["overview", "finance", "settings"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} sampleMode={!householdId} /> : null}
           {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
         </main>
       </div>
