@@ -921,7 +921,11 @@ export type Database = {
     }
     Functions: {
       accept_household_invitation: {
-        Args: { target_token_hash: string }
+        Args: {
+          accepting_email: string
+          accepting_user_id: string
+          target_token_hash: string
+        }
         Returns: string
       }
       add_budget_category: {

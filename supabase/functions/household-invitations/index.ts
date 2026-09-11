@@ -5,6 +5,7 @@ const encoder = new TextEncoder();
 function toHex(bytes: Uint8Array) { return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 async function sha256(value: string) { return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))); }
 function randomToken() { const bytes = new Uint8Array(32); crypto.getRandomValues(bytes); return toHex(bytes); }
+function escapeHtml(value: string) { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character] ?? character); }
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -23,7 +24,12 @@ Deno.serve(async (request) => {
 
     if (body.action === "accept") {
       if (!body.token) return jsonResponse({ error: "Invitationslinket mangler." }, 400);
-      const { data, error } = await userClient.rpc("accept_household_invitation", { target_token_hash: await sha256(body.token) });
+      if (!authData.user.email) return jsonResponse({ error: "Din konto mangler en e-mailadresse." }, 400);
+      const { data, error } = await admin.rpc("accept_household_invitation", {
+        accepting_email: authData.user.email,
+        accepting_user_id: authData.user.id,
+        target_token_hash: await sha256(body.token),
+      });
       if (error) return jsonResponse({ error: error.message }, 400);
       return jsonResponse({ householdId: data });
     }
@@ -52,16 +58,19 @@ Deno.serve(async (request) => {
     const resendFrom = Deno.env.get("RESEND_FROM");
     const appUrl = Deno.env.get("APP_URL")?.replace(/\/$/, "");
     if (!resendKey || !resendFrom || !appUrl) return jsonResponse({ error: "E-mailafsenderen er ikke konfigureret endnu." }, 503);
-    await admin.from("household_invitations").update({ revoked_at: new Date().toISOString() }).eq("household_id", body.householdId).ilike("email", email).is("accepted_at", null).is("revoked_at", null);
+    const { error: revokeError } = await admin.from("household_invitations").update({ revoked_at: new Date().toISOString() }).eq("household_id", body.householdId).ilike("email", email).is("accepted_at", null).is("revoked_at", null);
+    if (revokeError) throw revokeError;
     const token = randomToken();
-    const { error: insertError } = await admin.from("household_invitations").insert({ household_id: body.householdId, email, token_hash: await sha256(token), invited_by: authData.user.id });
+    const { data: invitation, error: insertError } = await admin.from("household_invitations").insert({ household_id: body.householdId, email, token_hash: await sha256(token), invited_by: authData.user.id }).select("id").single();
     if (insertError) throw insertError;
     const inviteUrl = `${appUrl}/invitation/accept?token=${encodeURIComponent(token)}`;
-    const mail = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: resendFrom, to: [email], subject: "Du er inviteret til Hjemblik", html: `<div style="font-family:Arial,sans-serif;color:#172033"><h1>Velkommen til Hjemblik</h1><p>${authData.user.email ?? "Ejeren"} har inviteret dig til husstanden.</p><p><a href="${inviteUrl}" style="display:inline-block;padding:12px 18px;background:#2563eb;color:white;text-decoration:none;border-radius:8px">Åbn invitation</a></p><p>Linket udløber efter syv dage.</p></div>` }) });
-    if (!mail.ok) throw new Error("Invitationsmailen kunne ikke sendes.");
+    const mail = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: resendFrom, to: [email], subject: "Du er inviteret til Hjemblik", html: `<div style="font-family:Arial,sans-serif;color:#172033"><h1>Velkommen til Hjemblik</h1><p>${escapeHtml(authData.user.email)} har inviteret dig til husstanden.</p><p><a href="${inviteUrl}" style="display:inline-block;padding:12px 18px;background:#2563eb;color:white;text-decoration:none;border-radius:8px">Åbn invitation</a></p><p>Linket udløber efter syv dage.</p></div>` }) });
+    if (!mail.ok) {
+      await admin.from("household_invitations").update({ revoked_at: new Date().toISOString() }).eq("id", invitation.id);
+      throw new Error("Invitationsmailen kunne ikke sendes.");
+    }
     return jsonResponse({ ok: true });
   } catch (reason) {
     return jsonResponse({ error: reason instanceof Error ? reason.message : "Invitationen kunne ikke behandles." }, 500);
   }
 });
-

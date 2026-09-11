@@ -113,24 +113,53 @@ export function aggregateIngredients(items: MealPlanItem[]) {
   return [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name, "da"));
 }
 
+export type ShoppingQuantity = { quantity: number | null; unit: string | null };
+
+export function parseShoppingQuantity(value: string | null): ShoppingQuantity {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) return { quantity: null, unit: null };
+  const match = normalized.match(/^(\d+(?:[.,]\d+)?)\s*(.*)$/u);
+  if (!match) return { quantity: null, unit: normalized.toLocaleLowerCase("da-DK") };
+  return {
+    quantity: Number(match[1].replace(",", ".")),
+    unit: match[2].trim().toLocaleLowerCase("da-DK") || null,
+  };
+}
+
+export function formatShoppingQuantity(value: ShoppingQuantity) {
+  if (value.quantity === null) return value.unit;
+  return `${value.quantity.toLocaleString("da-DK")} ${value.unit ?? ""}`.trim();
+}
+
+export function mergeShoppingQuantity(current: ShoppingQuantity, incoming: ShoppingQuantity): ShoppingQuantity {
+  if (current.quantity !== null && incoming.quantity !== null) {
+    return { quantity: current.quantity + incoming.quantity, unit: incoming.unit };
+  }
+  if (current.quantity !== null) return current;
+  if (incoming.quantity !== null) return incoming;
+  return { quantity: null, unit: incoming.unit ?? current.unit };
+}
+
 export async function addIngredientsToShoppingList(householdId: string, userId: string, items: MealPlanItem[]) {
   const supabase = getSupabaseBrowserClient();
   const ingredients = aggregateIngredients(items);
   const currentResult = await supabase.from("shopping_items").select("id, title, quantity").eq("household_id", householdId).is("completed_at", null);
   if (currentResult.error) throw currentResult.error;
-  const currentByKey = new Map((currentResult.data ?? []).map((row) => [row.title.trim().toLocaleLowerCase("da-DK"), row]));
+  const currentByKey = new Map((currentResult.data ?? []).map((row) => {
+    const parsed = parseShoppingQuantity(row.quantity);
+    return [`${row.title.trim().toLocaleLowerCase("da-DK")}::${parsed.unit ?? ""}`, { ...row, parsed }] as const;
+  }));
   for (const ingredient of ingredients) {
-    const key = ingredient.name.toLocaleLowerCase("da-DK");
-    const quantity = ingredient.quantity === null ? ingredient.unit : `${ingredient.quantity.toLocaleString("da-DK")} ${ingredient.unit ?? ""}`.trim();
+    const key = `${ingredient.name.toLocaleLowerCase("da-DK")}::${ingredient.unit ?? ""}`;
+    const incoming = { quantity: ingredient.quantity, unit: ingredient.unit };
     const existing = currentByKey.get(key);
     if (existing) {
-      const updated = await supabase.from("shopping_items").update({ quantity }).eq("id", existing.id).eq("household_id", householdId);
+      const updated = await supabase.from("shopping_items").update({ quantity: formatShoppingQuantity(mergeShoppingQuantity(existing.parsed, incoming)) }).eq("id", existing.id).eq("household_id", householdId);
       if (updated.error) throw updated.error;
     } else {
-      const inserted = await supabase.from("shopping_items").insert({ household_id: householdId, created_by: userId, title: ingredient.name, quantity });
+      const inserted = await supabase.from("shopping_items").insert({ household_id: householdId, created_by: userId, title: ingredient.name, quantity: formatShoppingQuantity(incoming) });
       if (inserted.error) throw inserted.error;
     }
   }
   return ingredients.length;
 }
-

@@ -124,14 +124,16 @@ export async function saveCalendarEvent(householdId: string, userId: string, eve
     ? await supabase.from("calendar_events").update(payload).eq("id", eventId).eq("household_id", householdId).select("id").single()
     : await supabase.from("calendar_events").insert({ ...payload, created_by: userId }).select("id").single();
   if (result.error) throw result.error;
-  await supabase.from("calendar_event_reminders").delete().eq("event_id", result.data.id).eq("household_id", householdId);
-  if (event.reminderMinutes !== null) {
-    const reminder = await supabase.from("calendar_event_reminders").insert({
+  if (event.reminderMinutes === null) {
+    const reminder = await supabase.from("calendar_event_reminders").delete().eq("event_id", result.data.id).eq("household_id", householdId);
+    if (reminder.error) throw reminder.error;
+  } else {
+    const reminder = await supabase.from("calendar_event_reminders").upsert({
       household_id: householdId,
       event_id: result.data.id,
       minutes_before: event.reminderMinutes,
       channels: ["in_app", "email"],
-    });
+    }, { onConflict: "event_id" });
     if (reminder.error) throw reminder.error;
   }
   return result.data.id;

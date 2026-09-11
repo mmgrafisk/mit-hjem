@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { expandCalendarEvents, type CalendarEvent } from "../app/calendar-data";
-import { aggregateIngredients, type MealPlanItem } from "../app/meal-plan-data";
+import { aggregateIngredients, mergeShoppingQuantity, parseShoppingQuantity, type MealPlanItem } from "../app/meal-plan-data";
+import { dueReminderOccurrences, type ReminderEvent } from "../supabase/functions/_shared/calendar-recurrence";
 
 process.env.TZ = "Europe/Copenhagen";
 
@@ -36,6 +37,61 @@ test("identiske ingredienser med samme enhed samles", () => {
   assert.deepEqual(aggregateIngredients(items), [{ name: "Citron", quantity: 1, unit: "stk" }, { name: "Tomater", quantity: 650, unit: "g" }]);
 });
 
+test("indkøbsmængder lægges til eksisterende varer med samme enhed", () => {
+  const existing = parseShoppingQuantity("1,5 kg");
+  assert.deepEqual(existing, { quantity: 1.5, unit: "kg" });
+  assert.deepEqual(mergeShoppingQuantity(existing, { quantity: 0.75, unit: "kg" }), { quantity: 2.25, unit: "kg" });
+  assert.notDeepEqual(parseShoppingQuantity("2 stk"), parseShoppingQuantity("2 kg"));
+});
+
+function reminderEvent(overrides: Partial<ReminderEvent> = {}): ReminderEvent {
+  return {
+    id: "event-1",
+    household_id: "house-1",
+    title: "Aftale",
+    description: null,
+    starts_at: "2028-03-20T07:00:00.000Z",
+    ends_at: "2028-03-20T08:00:00.000Z",
+    timezone: "Europe/Copenhagen",
+    assigned_to: null,
+    recurrence: "weekly",
+    recurrence_interval: 1,
+    recurrence_end_on: null,
+    ...overrides,
+  };
+}
+
+test("påmindelser bevarer lokalt klokkeslæt over sommertid", () => {
+  const rows = dueReminderOccurrences(
+    reminderEvent(),
+    0,
+    new Date("2028-04-03T05:59:00.000Z"),
+    new Date("2028-04-03T06:01:00.000Z"),
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(new Intl.DateTimeFormat("da-DK", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Copenhagen" }).format(rows[0].startsAt), "08.00");
+});
+
+test("påmindelser bruger flyttede forekomster og springer annullerede over", () => {
+  const source = reminderEvent({ starts_at: "2028-01-01T09:00:00.000Z", recurrence: "daily" });
+  const exceptions = [{ event_id: source.id, occurrence_start: "2028-01-02T09:00:00.000Z", cancelled: false, starts_at: "2028-01-02T11:00:00.000Z", title: "Flyttet", description: "Ny tid" }];
+  const moved = dueReminderOccurrences(source, 60, new Date("2028-01-02T09:59:00.000Z"), new Date("2028-01-02T10:01:00.000Z"), exceptions);
+  assert.deepEqual(moved.map((row) => [row.title, row.startsAt.toISOString()]), [["Flyttet", "2028-01-02T11:00:00.000Z"]]);
+  const cancelled = dueReminderOccurrences(source, 60, new Date("2028-01-02T07:59:00.000Z"), new Date("2028-01-02T08:01:00.000Z"), [{ ...exceptions[0], cancelled: true, starts_at: null }]);
+  assert.equal(cancelled.length, 0);
+});
+
+test("påmindelser kan udløses dagen før en fremtidig forekomst", () => {
+  const rows = dueReminderOccurrences(reminderEvent({ starts_at: "2028-04-04T08:00:00.000Z", recurrence: "once" }), 1440, new Date("2028-04-03T07:59:00.000Z"), new Date("2028-04-03T08:01:00.000Z"));
+  assert.equal(rows.length, 1);
+});
+
+test("ugyldige kalendertidszoner afvises i databasen", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260911151818_validate_calendar_timezones.sql", import.meta.url), "utf8");
+  assert.match(sql, /pg_catalog\.pg_timezone_names/i);
+  assert.match(sql, /create trigger calendar_events_validate_timezone/i);
+});
+
 test("kerne-migrationen har RLS, ejerrolle, token-hash og idempotente leveringer", async () => {
   const sql = await readFile(new URL("../supabase/migrations/20260911113904_add_hjemblik_core_features.sql", import.meta.url), "utf8");
   assert.match(sql, /role in \('owner', 'member'\)/);
@@ -45,3 +101,9 @@ test("kerne-migrationen har RLS, ejerrolle, token-hash og idempotente leveringer
   assert.match(sql, /accept_household_invitation/);
 });
 
+test("invitationsaccept er begrænset til serverens service role", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260911145511_harden_household_invitation_acceptance.sql", import.meta.url), "utf8");
+  assert.match(sql, /create function public\.accept_household_invitation[\s\S]*?security invoker/i);
+  assert.match(sql, /revoke all .* authenticated/i);
+  assert.match(sql, /grant execute .* service_role/i);
+});
