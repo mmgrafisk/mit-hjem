@@ -60,57 +60,11 @@ function userName(user: User) {
 
 async function ensureHousehold(user: User): Promise<Household> {
   const supabase = getSupabaseBrowserClient();
-  const fullName = userName(user);
-
-  const profileResult = await supabase.from("profiles").upsert({
-    id: user.id,
-    full_name: fullName,
-    locale: "da-DK",
-  });
-  if (profileResult.error) throw profileResult.error;
-
-  const membershipResult = await supabase
-    .from("household_members")
-    .select("household_id, households(id, name)")
-    .eq("user_id", user.id)
-    .order("joined_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (membershipResult.error) throw membershipResult.error;
-
-  const joinedHousehold = membershipResult.data?.households;
-  if (joinedHousehold && !Array.isArray(joinedHousehold)) return joinedHousehold;
-
-  const existingResult = await supabase
-    .from("households")
-    .select("id, name")
-    .eq("created_by", user.id)
-    .limit(1)
-    .maybeSingle();
-  if (existingResult.error) throw existingResult.error;
-
-  let household = existingResult.data;
-  if (!household) {
-    const createdResult = await supabase
-      .from("households")
-      .insert({ created_by: user.id, name: "Mit hjem", locale: "da-DK", currency: "DKK" })
-      .select("id, name")
-      .single();
-    if (createdResult.error) throw createdResult.error;
-    household = createdResult.data;
-  }
-
-  const memberResult = await supabase.from("household_members").upsert(
-    {
-      household_id: household.id,
-      user_id: user.id,
-      role: "owner",
-    },
-    { onConflict: "household_id,user_id" },
-  );
-  if (memberResult.error) throw memberResult.error;
-
-  return household;
+  const result = await supabase.rpc("ensure_current_user_household", { p_full_name: userName(user) });
+  if (result.error) throw result.error;
+  const household = result.data?.[0];
+  if (!household) throw new Error("Husstanden kunne ikke oprettes.");
+  return { id: household.household_id, name: household.household_name };
 }
 
 function LoadingScreen({ label = "Åbner dit hjem…" }: { label?: string }) {

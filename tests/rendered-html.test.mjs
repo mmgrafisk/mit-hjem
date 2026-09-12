@@ -59,7 +59,7 @@ test("connects account login and household data without privileged keys", async 
   assert.match(auth, /supabase\.auth\.resend/);
   assert.match(auth, /Send nyt bekræftelseslink/);
   assert.match(auth, /ensureHousehold/);
-  assert.match(auth, /household_members/);
+  assert.match(auth, /ensure_current_user_household/);
   assert.match(app, /from\("tasks"\)/);
   assert.match(app, /from\("shopping_items"\)/);
   assert.match(client, /PublicSupabaseConfig/);

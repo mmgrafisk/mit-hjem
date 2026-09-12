@@ -4,6 +4,7 @@ import test from "node:test";
 import { expandCalendarEvents, type CalendarEvent } from "../app/calendar-data";
 import { aggregateIngredients, mergeShoppingQuantity, nextMealSlot, parseShoppingQuantity, type MealPlanItem } from "../app/meal-plan-data";
 import { dueReminderOccurrences, type ReminderEvent } from "../supabase/functions/_shared/calendar-recurrence";
+import { reminderChannelIsAvailable } from "../supabase/functions/_shared/reminder-channels";
 
 process.env.TZ = "Europe/Copenhagen";
 
@@ -97,6 +98,16 @@ test("påmindelser kan udløses dagen før en fremtidig forekomst", () => {
   assert.equal(rows.length, 1);
 });
 
+test("in-app-påmindelser virker uden Resend", () => {
+  assert.equal(reminderChannelIsAvailable("in_app", {}), true);
+  assert.equal(reminderChannelIsAvailable("email", {}), false);
+  assert.equal(reminderChannelIsAvailable("email", { resendKey: "key-only" }), false);
+});
+
+test("e-mailpåmindelser aktiveres først med komplet Resend-konfiguration", () => {
+  assert.equal(reminderChannelIsAvailable("email", { resendKey: "re_test", resendFrom: "Hjemblik <hej@example.dk>" }), true);
+});
+
 test("ugyldige kalendertidszoner afvises i databasen", async () => {
   const sql = await readFile(new URL("../supabase/migrations/20260911151818_validate_calendar_timezones.sql", import.meta.url), "utf8");
   assert.match(sql, /pg_catalog\.pg_timezone_names/i);
@@ -117,4 +128,23 @@ test("invitationsaccept er begrænset til serverens service role", async () => {
   assert.match(sql, /create function public\.accept_household_invitation[\s\S]*?security invoker/i);
   assert.match(sql, /revoke all .* authenticated/i);
   assert.match(sql, /grant execute .* service_role/i);
+});
+
+test("cron-hemmeligheden valideres server-side og er ikke offentlig", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260911215156_verify_calendar_reminder_cron_secret.sql", import.meta.url), "utf8");
+  const schedulerSql = await readFile(new URL("../supabase/migrations/20260912082000_restrict_reminder_scheduler.sql", import.meta.url), "utf8");
+  assert.match(sql, /from vault\.decrypted_secrets/i);
+  assert.match(sql, /security definer/i);
+  assert.match(sql, /revoke all .* public, anon, authenticated/i);
+  assert.match(sql, /grant execute .* service_role/i);
+  assert.match(schedulerSql, /revoke all .* public, anon, authenticated/i);
+});
+
+test("førstegangsoprettelse af husstand er atomisk og kun tilgængelig efter login", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260912075000_finish_rls_household_bootstrap.sql", import.meta.url), "utf8");
+  assert.match(sql, /pg_advisory_xact_lock/i);
+  assert.match(sql, /membership_exists := found/i);
+  assert.match(sql, /security invoker/i);
+  assert.match(sql, /revoke all .* public, anon/i);
+  assert.match(sql, /grant execute .* authenticated/i);
 });

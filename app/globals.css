@@ -334,7 +334,7 @@ main { padding: 20px 24px 44px; }
 .budget-transaction-link { width: 100%; min-height: 32px; display: flex; align-items: center; padding: 0; color: inherit; background: transparent; border: 0; cursor: pointer; text-align: left; }
 .budget-transaction-link strong { overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 620; }
 .budget-empty-cell { color: var(--muted); opacity: .65; }
-.budget-sheet input { display: block; width: calc(100% + 2px); min-height: 27px; margin: 0 -1px 0 auto; padding: 0 1px; appearance: textfield; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 5px; outline: 0; text-align: right; font-size: 12px; font-weight: 520; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "lnum" 1; }
+.budget-sheet input { display: block; width: calc(100% + 1px); min-height: 27px; margin: 0 -1px 0 0; padding: 0; appearance: textfield; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 5px; outline: 0; text-align: right; font-size: 12px; font-weight: 520; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "lnum" 1; }
 .budget-sheet input::-webkit-inner-spin-button, .budget-sheet input::-webkit-outer-spin-button { margin: 0; appearance: none; }
 .budget-sheet input:hover { background: var(--surface-soft); border-color: var(--line); }
 .budget-sheet input:focus { background: var(--surface); border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent); }

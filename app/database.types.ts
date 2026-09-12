@@ -928,6 +928,10 @@ export type Database = {
         }
         Returns: string
       }
+      ensure_current_user_household: {
+        Args: { p_full_name?: string | null }
+        Returns: { household_id: string; household_name: string }[]
+      }
       add_budget_category: {
         Args: {
           p_budget_ids: string[]
