@@ -42,16 +42,20 @@ test("server-renders the authenticated Hjemblik entry point", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 test("connects account login and household data without privileged keys", async () => {
-  const [page, auth, app, client, exampleEnv] = await Promise.all([
+  const [page, auth, app, checklist, client, exampleEnv] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/auth-gate.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/checklist-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/supabase-client.ts", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
   ]);
 
   assert.match(auth, /signInWithPassword/);
   assert.match(auth, /signUp/);
+  assert.match(auth, /resetPasswordForEmail/);
+  assert.match(auth, /updateUser\(\{\s*password,?\s*\}\)/);
+  assert.match(auth, /Glemt adgangskode/);
   assert.match(auth, /authRedirectUrl/);
   assert.match(page, /process\.env/);
   assert.match(page, /NEXT_PUBLIC_APP_URL/);
@@ -60,13 +64,16 @@ test("connects account login and household data without privileged keys", async 
   assert.match(auth, /Send nyt bekræftelseslink/);
   assert.match(auth, /ensureHousehold/);
   assert.match(auth, /ensure_current_user_household/);
-  assert.match(app, /from\("tasks"\)/);
-  assert.match(app, /from\("shopping_items"\)/);
+  assert.match(checklist, /from\("tasks"\)/);
+  assert.match(checklist, /from\("shopping_items"\)/);
+  assert.match(app, /TasksView/);
+  assert.match(app, /ShoppingView/);
+  assert.match(app, /loadNotificationPreferences/);
   assert.match(client, /PublicSupabaseConfig/);
   assert.doesNotMatch(client, /process\.env\.NEXT_PUBLIC_/);
   assert.match(exampleEnv, /sb_publishable_your_key/);
   assert.match(exampleEnv, /NEXT_PUBLIC_APP_URL/);
-  assert.doesNotMatch(`${auth}\n${app}\n${client}\n${exampleEnv}`, /service[_-]?role|secret[_-]?key/i);
+  assert.doesNotMatch(`${auth}\n${app}\n${checklist}\n${client}\n${exampleEnv}`, /service[_-]?role|secret[_-]?key/i);
 });
 
 test("renders a visible configuration error instead of crashing", async () => {
@@ -142,7 +149,9 @@ test("keeps templates, languages and printable exports configurable", async () =
   assert.match(app, /Ingen planlagte måltider i denne uge/);
   assert.doesNotMatch(app, /mealItems\.length \? mealItems\.map[\s\S]*?: meals\.map/);
   assert.match(app, /prefers-color-scheme: dark/);
-  assert.match(app, /mit-hjem:preferences:v1/);
+  assert.match(app, /mit-hjem:preferences:v2/);
+  assert.match(app, /sampleMode \? calendarItems/);
+  assert.match(app, /sampleMode \? meals/);
   assert.match(app, /Vælg udseende/);
   assert.match(config, /defaultTemplate: "command"/);
   assert.match(config, /supportedLanguages/);
@@ -153,4 +162,25 @@ test("keeps templates, languages and printable exports configurable", async () =
   assert.match(css, /appearance-grid/);
   assert.match(css, /@media print/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
+});
+
+test("keeps modal focus handling and task assignment household-safe", async () => {
+  const [modalAccessibility, calendar, mealPlan, household, migration] = await Promise.all([
+    readFile(new URL("../app/modal-accessibility.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/calendar-view.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/meal-plan-view.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/household-view.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/20260913090000_harden_task_assignment_and_notification_defaults.sql", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(modalAccessibility, /event\.key === "Escape"/);
+  assert.match(modalAccessibility, /event\.key !== "Tab"/);
+  assert.match(modalAccessibility, /previousFocus\?\.focus/);
+  assert.match(calendar, /useModalAccessibility\(onClose, saving\)/);
+  assert.match(mealPlan, /useModalAccessibility\(onClose, saving\)/);
+  assert.match(household, /useModalAccessibility\(onClose, saving\)/);
+  assert.match(migration, /validate_task_assignee_household/i);
+  assert.match(migration, /membership\.household_id = new\.household_id/i);
+  assert.match(migration, /revoke all on function private\.validate_task_assignee_household\(\) from public, anon, authenticated/i);
+  assert.match(migration, /email_enabled set default false/i);
 });

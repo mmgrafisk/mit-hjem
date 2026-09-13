@@ -5,8 +5,15 @@ import { expandCalendarEvents, type CalendarEvent } from "../app/calendar-data";
 import { aggregateIngredients, mergeShoppingQuantity, nextMealSlot, parseShoppingQuantity, type MealPlanItem } from "../app/meal-plan-data";
 import { dueReminderOccurrences, type ReminderEvent } from "../supabase/functions/_shared/calendar-recurrence";
 import { reminderChannelIsAvailable } from "../supabase/functions/_shared/reminder-channels";
+import { taskMeta, type TaskItem } from "../app/checklist-data";
 
 process.env.TZ = "Europe/Copenhagen";
+
+test("opgaver viser ansvarlig eller en ærlig tom frist", () => {
+  const base: TaskItem = { id: "task-1", title: "Bestil service", description: null, assignedTo: null, assignedName: null, dueAt: null, recurrence: null, createdBy: "user-1", done: false };
+  assert.equal(taskMeta(base), "Ingen frist");
+  assert.equal(taskMeta({ ...base, assignedTo: "user-1", assignedName: "Michael" }), "Michael");
+});
 
 function event(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
   return { id: "event-1", householdId: "house-1", title: "Aftale", description: null, location: null, startsAt: "2028-01-31T08:00:00.000Z", endsAt: "2028-01-31T09:00:00.000Z", allDay: false, timezone: "Europe/Copenhagen", assignedTo: null, recurrence: "monthly", recurrenceInterval: 1, recurrenceEndOn: null, reminderMinutes: 60, ...overrides };

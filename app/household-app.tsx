@@ -46,6 +46,23 @@ import {
   type ChecklistItem,
 } from "./demo-data";
 import {
+  clearCompletedShoppingItems,
+  deleteShoppingItem,
+  deleteTask,
+  loadShoppingItems,
+  loadTasks,
+  saveShoppingItem,
+  saveTask,
+  setShoppingItemCompleted,
+  setTaskCompleted,
+  taskMeta,
+  type ShoppingInput,
+  type ShoppingListItem,
+  type TaskInput,
+  type TaskItem,
+} from "./checklist-data";
+import { ShoppingView, TasksView, type TaskMemberOption } from "./checklist-views";
+import {
   createDocumentUrl,
   documentKindLabel,
   documentMeta,
@@ -102,9 +119,11 @@ import {
 import { getSupabaseBrowserClient } from "./supabase-client";
 import { CalendarView } from "./calendar-view";
 import { HouseholdView } from "./household-view";
+import { loadHouseholdAccess } from "./household-data";
 import { MealPlanView } from "./meal-plan-view";
 import { aggregateIngredients, formatShoppingQuantity, loadMealPlan, mondayFor, type MealPlanItem } from "./meal-plan-data";
-import { loadNotifications, markNotificationRead, type HouseholdNotification } from "./notifications-data";
+import { loadNotificationPreferences, loadNotifications, markNotificationRead, saveNotificationPreferences, type HouseholdNotification, type NotificationPreferences } from "./notifications-data";
+import { useModalAccessibility } from "./modal-accessibility";
 
 type View =
   | "overview"
@@ -130,7 +149,9 @@ type HouseholdAppProps = {
   onSignOut?: () => void | Promise<void>;
 };
 
-const preferencesStorageKey = "mit-hjem:preferences:v1";
+function preferencesStorageKey(userId?: string) {
+  return `mit-hjem:preferences:v2:${userId || "preview"}`;
+}
 
 const navItems = [
   ["overview", "Overblik", LayoutDashboard],
@@ -179,6 +200,20 @@ const demoDocuments: HouseholdDocument[] = [
 const demoSubscriptions: Subscription[] = [
   { id: "demo-sub-1", name: "Norlys", websiteUrl: "https://norlys.dk", accountIdentifier: "anders@example.dk", passwordManagerUrl: null, amount: 499, billingIntervalMonths: 1, trialEndsOn: null, cancellationDeadlineOn: null, nextPaymentOn: "2025-06-23", status: "active", linkedTransactionId: "demo-1", linkedDocumentIds: ["demo-doc-1"] },
 ];
+
+const demoTasks: TaskItem[] = initialTasks.map((item) => ({
+  id: item.id,
+  title: item.title,
+  description: null,
+  assignedTo: null,
+  assignedName: item.meta?.split(" · ").at(-1) ?? null,
+  dueAt: null,
+  recurrence: null,
+  createdBy: null,
+  done: item.done,
+}));
+
+const demoShopping: ShoppingListItem[] = initialShopping.map((item) => ({ id: item.id, title: item.title, quantity: item.meta ?? null, createdBy: null, done: item.done }));
 
 function createDemoPeriodFinance(mode: BudgetPeriodMode, selectedYear: number): FinancePeriodSnapshot {
   const now = new Date();
@@ -248,9 +283,10 @@ function CheckRow({
   item,
   onToggle,
 }: {
-  item: ChecklistItem;
-  onToggle: (id: ChecklistItem["id"]) => void;
+  item: TaskItem | ShoppingListItem | ChecklistItem;
+  onToggle: (id: string | number) => void;
 }) {
+  const meta = "dueAt" in item ? taskMeta(item) : "quantity" in item ? item.quantity : item.meta;
   return (
     <button
       aria-pressed={item.done}
@@ -261,7 +297,7 @@ function CheckRow({
       <span className="checkbox">{item.done ? <Check size={13} /> : null}</span>
       <span>
         <strong>{item.title}</strong>
-        {item.meta ? <small>{item.meta}</small> : null}
+        {meta ? <small>{meta}</small> : null}
       </span>
     </button>
   );
@@ -321,22 +357,42 @@ function Overview({
   openAdd,
   openUpload,
   openDocument,
+  openIncome,
+  sampleMode,
+  mealItems,
+  dataReady,
 }: {
   finance: FinanceSnapshot;
   actions: typeof initialActions;
   approve: (id: number) => void;
-  tasks: ChecklistItem[];
-  shopping: ChecklistItem[];
+  tasks: TaskItem[];
+  shopping: ShoppingListItem[];
   documents: HouseholdDocument[];
-  toggleTask: (id: ChecklistItem["id"]) => void;
-  toggleShopping: (id: ChecklistItem["id"]) => void;
+  toggleTask: (id: string | number) => void;
+  toggleShopping: (id: string | number) => void;
   navigate: (view: View) => void;
   openAdd: (kind: "task" | "shopping") => void;
   openUpload: () => void;
   openDocument: (document: HouseholdDocument) => void | Promise<void>;
+  openIncome: () => void;
+  sampleMode: boolean;
+  mealItems: MealPlanItem[];
+  dataReady: boolean;
 }) {
+  const firstRun = dataReady && finance.transactions.length === 0 && tasks.length === 0 && shopping.length === 0 && documents.length === 0;
   return (
     <div className="dashboard-grid">
+      {firstRun ? (
+        <section className="activation-panel">
+          <div><Sparkles size={20} /><span><strong>Gør Hjemblik klar på få minutter</strong><p>Start med de vigtigste oplysninger. Resten kan I tilføje løbende.</p></span></div>
+          <div className="activation-actions">
+            <button onClick={openIncome} type="button"><CircleDollarSign size={16} /><span><strong>Tilføj indtægt</strong><small>Få budgettet i gang</small></span></button>
+            <button onClick={() => openAdd("task")} type="button"><CheckSquare size={16} /><span><strong>Opret opgave</strong><small>Fordel det første ansvar</small></span></button>
+            <button onClick={openUpload} type="button"><Upload size={16} /><span><strong>Upload dokument</strong><small>Saml jeres vigtige papirer</small></span></button>
+            <button onClick={() => navigate("meals")} type="button"><UtensilsCrossed size={16} /><span><strong>Planlæg et måltid</strong><small>Byg indkøbslisten automatisk</small></span></button>
+          </div>
+        </section>
+      ) : null}
       <BudgetHero finance={finance} onOpen={() => navigate("finance")} />
 
       <Panel className="payments-panel">
@@ -398,13 +454,13 @@ function Overview({
       <Panel className="calendar-panel">
         <SectionTitle title="Kalender" action="Se kalender" onAction={() => navigate("calendar")} />
         <div className="calendar-list">
-          {calendarItems.map(([day, time, title, tone], index) => (
+          {sampleMode ? calendarItems.map(([day, time, title, tone], index) => (
             <button key={`${day}-${time}`} onClick={() => navigate("calendar")} type="button">
               <span className={`timeline-dot dot-${tone}`} />
               <time>{index === 0 || calendarItems[index - 1][0] !== day ? day : ""}</time>
               <b>{time}</b><span>{title}</span>
             </button>
-          ))}
+          )) : <div className="empty-state panel-empty-action"><CalendarDays size={17} /><span>Se aftaler og påmindelser i kalenderen.</span><button onClick={() => navigate("calendar")} type="button">Åbn kalender</button></div>}
         </div>
       </Panel>
 
@@ -419,14 +475,14 @@ function Overview({
       <Panel className="meal-panel">
         <SectionTitle title="Madplan" action="Se madplan" onAction={() => navigate("meals")} />
         <div className="meal-strip">
-          {meals.map(([day, meal, duration], index) => (
+          {sampleMode ? meals.map(([day, meal, duration], index) => (
             <button key={day} onClick={() => navigate("meals")} type="button">
               <small>{day}</small>
               <span className={`meal-visual meal-${index + 1}`} aria-hidden="true" />
               <strong>{meal}</strong>
               <em>{duration}</em>
             </button>
-          ))}
+          )) : mealItems.length ? mealItems.slice(0, 7).map((item, index) => <button key={item.id} onClick={() => navigate("meals")} type="button"><small>{["Man", "Tir", "Ons", "Tor", "Fre", "Lør", "Søn"][item.dayOfWeek - 1]}</small><span className={`meal-visual meal-${(index % 7) + 1}`} aria-hidden="true" /><strong>{item.title}</strong><em>{item.durationMinutes ? `${item.durationMinutes} min` : ""}</em></button>) : <div className="empty-state panel-empty-action"><UtensilsCrossed size={17} /><span>Planlæg ugens første måltid.</span><button onClick={() => navigate("meals")} type="button">Åbn madplan</button></div>}
         </div>
       </Panel>
     </div>
@@ -607,6 +663,7 @@ function BudgetView({
   const valuesForRows = (rows: FinancePeriodTransactionRow[]) => financePeriod.months.map((_, monthIndex) => rows.reduce((sum, row) => sum + row.values[monthIndex], 0));
 
   const cancelEdit = () => { setPendingEdit(null); setEditError(null); setEditRevision((revision) => revision + 1); };
+  const repeatDialogRef = useModalAccessibility(cancelEdit, savingEdit, Boolean(pendingEdit));
   const saveEdit = async (edit: PendingOccurrenceEdit, scope: TransactionOccurrenceEditScope) => {
     setSavingEdit(true);
     setEditError(null);
@@ -713,7 +770,7 @@ function BudgetView({
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = await onAddCategory(name, categoryType); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {pendingEdit ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={savingEdit ? undefined : cancelEdit}>
-          <section aria-labelledby="repeat-budget-title" aria-modal="true" className="quick-modal repeat-budget-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog">
+          <section aria-labelledby="repeat-budget-title" aria-modal="true" className="quick-modal repeat-budget-modal" onMouseDown={(event) => event.stopPropagation()} ref={repeatDialogRef} role="dialog">
             <button aria-label="Luk" className="modal-close" disabled={savingEdit} onClick={cancelEdit} type="button"><X size={18} /></button>
             <div><small className="eyebrow">{pendingEdit.value === 0 ? "Fjern betaling" : "Gentag ændring"}</small><h2 id="repeat-budget-title">{pendingEdit.value === 0 ? "Hvordan skal betalingen fjernes?" : "Hvordan skal beløbet gælde?"}</h2><p className="modal-intro">{pendingEdit.row.transaction.recurrence === "once" ? `Fjern “${pendingEdit.row.transaction.merchant}” fra ${pendingEdit.monthLabel}?` : pendingEdit.value === 0 ? `Skal betalingen springes over i ${pendingEdit.monthLabel}, eller skal serien stoppe fra denne måned?` : `Skal ${currency.format(pendingEdit.value)} kun gælde ${pendingEdit.monthLabel}, eller også alle følgende betalinger?`}</p></div>
             <div className="repeat-budget-actions">
@@ -804,16 +861,24 @@ function SettingsView({
   template,
   setTemplate,
   language,
-  setLanguage,
   appearance,
   setAppearance,
+  notificationPreferences,
+  onNotificationPreferencesChange,
+  accountEmail,
+  onRequestPasswordReset,
+  accountMessage,
 }: {
   template: TemplateName;
   setTemplate: (template: TemplateName) => void;
   language: string;
-  setLanguage: (language: string) => void;
   appearance: Appearance;
   setAppearance: (appearance: Appearance) => void;
+  notificationPreferences: NotificationPreferences;
+  onNotificationPreferencesChange: (preferences: NotificationPreferences) => void | Promise<void>;
+  accountEmail?: string;
+  onRequestPasswordReset: () => void | Promise<void>;
+  accountMessage: string | null;
 }) {
   return (
     <div className="settings-page">
@@ -831,8 +896,8 @@ function SettingsView({
         </div>
       </Panel>
       <Panel>
-        <div className="settings-heading"><Globe2 size={20} /><span><h2>Sprog</h2><p>Platformen er gjort klar til 18 sprog.</p></span></div>
-        <label className="select-field">Visningssprog<select value={language} onChange={(event) => setLanguage(event.target.value)}>{supportedLanguages.map(([code, name]) => <option value={code} key={code}>{name}</option>)}</select></label>
+        <div className="settings-heading"><Globe2 size={20} /><span><h2>Sprog</h2><p>Dansk er aktivt. De øvrige sprog frigives, når alle tekster er kvalitetssikret.</p></span></div>
+        <label className="select-field">Visningssprog<select disabled value={language}><option value={language}>{supportedLanguages.find(([code]) => code === language)?.[1] ?? "Dansk"}</option></select></label>
       </Panel>
       <Panel>
         <div className="settings-heading"><Moon size={20} /><span><h2>Udseende</h2><p>Vælg et lyst eller mørkt design, eller følg enhedens indstilling.</p></span></div>
@@ -856,15 +921,27 @@ function SettingsView({
           ))}
         </div>
       </Panel>
+      <Panel>
+        <div className="settings-heading"><Bell size={20} /><span><h2>Notifikationer</h2><p>Vælg hvordan Hjemblik må minde dig om aftaler og frister.</p></span></div>
+        <div className="settings-switches">
+          <label><span><strong>I appen</strong><small>Vis påmindelser i notifikationscenteret.</small></span><input checked={notificationPreferences.inAppEnabled} onChange={(event) => void onNotificationPreferencesChange({ ...notificationPreferences, inAppEnabled: event.target.checked })} type="checkbox" /></label>
+          <label className="is-disabled"><span><strong>E-mail</strong><small>Bliver tilgængelig, når mailafsendelse aktiveres.</small></span><input checked={false} disabled type="checkbox" /></label>
+        </div>
+      </Panel>
+      <Panel>
+        <div className="settings-heading"><KeyRound size={20} /><span><h2>Konto og sikkerhed</h2><p>Skift adgangskoden via et sikkert engangslink.</p></span></div>
+        <div className="account-settings"><span><small>Logget ind som</small><strong>{accountEmail || "Lokal forhåndsvisning"}</strong></span>{accountEmail ? <button className="secondary-button" onClick={() => void onRequestPasswordReset()} type="button">Send link til ny adgangskode</button> : null}</div>
+        {accountMessage ? <p className="settings-message" role="status">{accountMessage}</p> : null}
+      </Panel>
     </div>
   );
 }
 
-function ExportMenu({ onExport }: { onExport: (target: "budget" | "meal") => void }) {
+function ExportMenu({ onExport, target }: { onExport: (target: "budget" | "meal") => void; target: "budget" | "meal" }) {
   return (
     <div className="export-menu">
-      <button onClick={() => onExport("budget")} type="button"><CircleDollarSign size={16} /><span><strong>Budget som PDF</strong><small>Valgt periode og kategorier</small></span></button>
-      <button onClick={() => onExport("meal")} type="button"><UtensilsCrossed size={16} /><span><strong>Madplan som PDF</strong><small>Ugeplan og indkøbsliste</small></span></button>
+      {target === "budget" ? <button onClick={() => onExport("budget")} type="button"><CircleDollarSign size={16} /><span><strong>Budget som PDF</strong><small>Valgt periode og kategorier</small></span></button> : null}
+      {target === "meal" ? <button onClick={() => onExport("meal")} type="button"><UtensilsCrossed size={16} /><span><strong>Madplan som PDF</strong><small>Ugeplan og indkøbsliste</small></span></button> : null}
     </div>
   );
 }
@@ -880,9 +957,10 @@ function QuickAdd({
 }) {
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
+  const dialogRef = useModalAccessibility(onClose, busy);
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <form aria-labelledby="quick-add-title" aria-modal="true" className="quick-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (!title.trim() || busy) return; setBusy(true); await onAdd(title.trim()); setBusy(false); }} role="dialog">
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
+      <form aria-labelledby="quick-add-title" aria-modal="true" className="quick-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (!title.trim() || busy) return; setBusy(true); await onAdd(title.trim()); setBusy(false); }} ref={dialogRef as React.RefObject<HTMLFormElement | null>} role="dialog">
         <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
         <span className="modal-icon">{kind === "task" ? <CheckSquare size={20} /> : <ShoppingCart size={20} />}</span>
         <h2 id="quick-add-title">{kind === "task" ? "Ny opgave" : "Tilføj til indkøb"}</h2>
@@ -904,8 +982,9 @@ function BudgetCategoryModal({
   const [categoryType, setCategoryType] = useState<Exclude<FinanceCategoryType, "uncategorized">>("variable_expense");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useModalAccessibility(onClose, busy);
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
       <form aria-labelledby="budget-category-title" aria-modal="true" className="quick-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
         event.preventDefault();
         if (!name.trim()) return;
@@ -914,7 +993,7 @@ function BudgetCategoryModal({
         const saved = await onAdd(name.trim(), categoryType);
         if (!saved) setError("Kategorien kunne ikke gemmes. Navnet findes måske allerede.");
         setBusy(false);
-      }} role="dialog">
+      }} ref={dialogRef as React.RefObject<HTMLFormElement | null>} role="dialog">
         <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
         <span className="modal-icon"><Plus size={20} /></span>
         <div><h2 id="budget-category-title">Ny budgetkategori</h2><p className="modal-intro">Kategorien bliver oprettet i alle måneder i den valgte periode.</p></div>
@@ -966,6 +1045,7 @@ function TransactionModal({
   const [linkedDocumentIds, setLinkedDocumentIds] = useState<string[]>(initial?.linkedDocumentIds ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useModalAccessibility(onClose, busy);
   const previewThrough = (() => {
     if (recurrenceEndOn) return recurrenceEndOn;
     const date = new Date(`${occurredOn}T12:00:00`);
@@ -976,7 +1056,7 @@ function TransactionModal({
   const occurrenceDates = recurrence === "once" ? [] : recurringTransactionDates(occurredOn, recurrence, { endDate: recurrenceEndOn || null, throughDate: previewThrough, limit: 24 });
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
       <form aria-labelledby="transaction-modal-title" aria-modal="true" className="quick-modal transaction-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
         event.preventDefault();
         const numericAmount = Number(amount.replace(",", "."));
@@ -993,7 +1073,7 @@ function TransactionModal({
         const saved = await onSave({ merchant: merchant.trim(), amount: numericAmount, direction, occurredOn, categoryId: direction === "expense" ? categoryId || null : null, recurrence, recurrenceEndOn: recurrence === "once" ? null : recurrenceEndOn || null, recurrenceGroupId: initial?.recurrenceGroupId, status: initial ? transactionStatus : undefined, linkedDocumentIds });
         if (!saved) setError("Posteringen kunne ikke gemmes. Prøv igen.");
         setBusy(false);
-      }} role="dialog">
+      }} ref={dialogRef as React.RefObject<HTMLFormElement | null>} role="dialog">
         <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
         <span className="modal-icon"><CircleDollarSign size={20} /></span>
         <div><h2 id="transaction-modal-title">{initial ? "Redigér postering" : "Ny postering"}</h2><p className="modal-intro">{initial ? "Ret beløb, dato eller kategori, så det faktiske budget stemmer." : `Registrér en udgift eller indtægt i ${financeMonthLabel(new Date().toISOString().slice(0, 7) + "-01").toLowerCase()}.`}</p></div>
@@ -1098,7 +1178,8 @@ function SubscriptionModal({ initial, transactions, documents, onClose, onDelete
   const [linkedDocumentIds, setLinkedDocumentIds] = useState<string[]>(initial?.linkedDocumentIds ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><form aria-labelledby="subscription-modal-title" aria-modal="true" className="quick-modal transaction-modal subscription-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
+  const dialogRef = useModalAccessibility(onClose, busy);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}><form aria-labelledby="subscription-modal-title" aria-modal="true" className="quick-modal transaction-modal subscription-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
     event.preventDefault();
     if (!name.trim()) { setError("Giv abonnementet et navn."); return; }
     const numericAmount = amount ? Number(amount.replace(",", ".")) : null;
@@ -1107,7 +1188,7 @@ function SubscriptionModal({ initial, transactions, documents, onClose, onDelete
     const saved = await onSave({ name: name.trim(), websiteUrl: websiteUrl.trim() || null, accountIdentifier: accountIdentifier.trim() || null, passwordManagerUrl: passwordManagerUrl.trim() || null, amount: numericAmount, billingIntervalMonths, trialEndsOn: trialEndsOn || null, cancellationDeadlineOn: cancellationDeadlineOn || null, nextPaymentOn: nextPaymentOn || null, status, linkedTransactionId: linkedTransactionId || null, linkedDocumentIds });
     if (!saved) setError("Abonnementet kunne ikke gemmes. Prøv igen.");
     setBusy(false);
-  }} role="dialog">
+  }} ref={dialogRef as React.RefObject<HTMLFormElement | null>} role="dialog">
     <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
     <span className="modal-icon"><Repeat2 size={20} /></span>
     <div><h2 id="subscription-modal-title">{initial ? "Redigér abonnement" : "Nyt abonnement"}</h2><p className="modal-intro">Gem frister og forbind dokumentation — men opbevar selve adgangskoden i din password manager.</p></div>
@@ -1143,11 +1224,12 @@ function DocumentUploadModal({
   const [visibility, setVisibility] = useState<DocumentVisibility>("household");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useModalAccessibility(onClose, busy);
   const kinds: DocumentKind[] = ["invoice", "receipt", "insurance", "payslip", "contract", "warranty", "other"];
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <form className="quick-modal transaction-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
+      <form aria-labelledby="document-upload-title" aria-modal="true" className="quick-modal transaction-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
         event.preventDefault();
         if (!file || !title.trim()) { setError("Vælg en fil og giv dokumentet et navn."); return; }
         setBusy(true);
@@ -1155,10 +1237,10 @@ function DocumentUploadModal({
         const uploadError = await onUpload(file, title.trim(), kind, visibility);
         if (uploadError) setError(uploadError);
         setBusy(false);
-      }}>
+      }} ref={dialogRef as React.RefObject<HTMLFormElement | null>} role="dialog">
         <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
         <span className="modal-icon"><Upload size={20} /></span>
-        <div><h2>Upload dokument</h2><p className="modal-intro">PDF, billeder, Word eller Excel · højst 20 MB.</p></div>
+        <div><h2 id="document-upload-title">Upload dokument</h2><p className="modal-intro">PDF, billeder, Word eller Excel · højst 20 MB.</p></div>
         <label className="file-drop">
           <Upload size={22} />
           <strong>{file ? file.name : "Vælg dokument"}</strong>
@@ -1262,8 +1344,8 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   const [resolvedAppearance, setResolvedAppearance] = useState<ResolvedAppearance>("light");
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [actions, setActions] = useState(householdId ? [] : initialActions);
-  const [tasks, setTasks] = useState<ChecklistItem[]>(householdId ? [] : initialTasks);
-  const [shopping, setShopping] = useState<ChecklistItem[]>(householdId ? [] : initialShopping);
+  const [tasks, setTasks] = useState<TaskItem[]>(householdId ? [] : demoTasks);
+  const [shopping, setShopping] = useState<ShoppingListItem[]>(householdId ? [] : demoShopping);
   const [householdDocuments, setHouseholdDocuments] = useState<HouseholdDocument[]>(householdId ? [] : demoDocuments);
   const [finance, setFinance] = useState<FinanceSnapshot>(() => householdId ? {
     ...demoFinance,
@@ -1295,16 +1377,23 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   const [documentUploadOpen, setDocumentUploadOpen] = useState(false);
   const [printTarget, setPrintTarget] = useState<"budget" | "meal" | null>(null);
   const [notifications, setNotifications] = useState<HouseholdNotification[]>([]);
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({ inAppEnabled: true, emailEnabled: false });
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [taskMembers, setTaskMembers] = useState<TaskMemberOption[]>(user ? [{ id: user.id, name: user.displayName }] : []);
+  const [canManageChecklists, setCanManageChecklists] = useState(!householdId);
+  const [accountMessage, setAccountMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [mealPrintItems, setMealPrintItems] = useState<MealPlanItem[]>([]);
   const [mealPrintWeekStart, setMealPrintWeekStart] = useState(mondayFor());
   const userId = user?.id;
   const visibleNavItems = navItems;
 
   useEffect(() => {
-    const restorePreferences = window.setTimeout(() => {
+    let active = true;
+    const storageKey = preferencesStorageKey(userId);
+    const restorePreferences = window.setTimeout(() => void (async () => {
       try {
-        const stored = window.localStorage.getItem(preferencesStorageKey);
+        const stored = window.localStorage.getItem(storageKey);
         if (stored) {
           const preferences = JSON.parse(stored) as { appearance?: Appearance; budgetPeriodMode?: BudgetPeriodMode; language?: string; template?: TemplateName };
           if (["light", "dark", "system"].includes(preferences.appearance ?? "")) setAppearance(preferences.appearance as Appearance);
@@ -1312,15 +1401,20 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
           if (supportedLanguages.some(([code]) => code === preferences.language)) setLanguage(preferences.language as string);
           if (Object.hasOwn(productConfig.templates, preferences.template ?? "")) setTemplate(preferences.template as TemplateName);
         }
-      } catch {
-        window.localStorage.removeItem(preferencesStorageKey);
-      } finally {
-        setPreferencesReady(true);
+      } catch { window.localStorage.removeItem(storageKey); }
+      if (userId) {
+        const { data } = await getSupabaseBrowserClient().from("profiles").select("appearance, locale").eq("id", userId).maybeSingle();
+        if (active && data) {
+          if (["light", "dark", "system"].includes(data.appearance)) setAppearance(data.appearance as Appearance);
+          const locale = data.locale.split("-")[0];
+          if (supportedLanguages.some(([code]) => code === locale)) setLanguage(locale);
+        }
       }
-    }, 0);
+      if (active) setPreferencesReady(true);
+    })(), 0);
 
-    return () => window.clearTimeout(restorePreferences);
-  }, []);
+    return () => { active = false; window.clearTimeout(restorePreferences); };
+  }, [userId]);
 
   useEffect(() => {
     const systemPreference = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1332,8 +1426,11 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
 
   useEffect(() => {
     if (!preferencesReady) return;
-    window.localStorage.setItem(preferencesStorageKey, JSON.stringify({ appearance, budgetPeriodMode, language, template }));
-  }, [appearance, budgetPeriodMode, language, preferencesReady, template]);
+    window.localStorage.setItem(preferencesStorageKey(userId), JSON.stringify({ appearance, budgetPeriodMode, language, template }));
+    if (!userId) return;
+    const saveRemote = window.setTimeout(() => void getSupabaseBrowserClient().from("profiles").update({ appearance, locale: language === "da" ? "da-DK" : language }).eq("id", userId), 250);
+    return () => window.clearTimeout(saveRemote);
+  }, [appearance, budgetPeriodMode, language, preferencesReady, template, userId]);
 
   useEffect(() => {
     const handleHistory = () => {
@@ -1356,34 +1453,19 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   useEffect(() => {
     if (!householdId) return;
     let active = true;
-    const supabase = getSupabaseBrowserClient();
     Promise.all([
-      supabase.from("tasks").select("id, title, due_at, completed_at").eq("household_id", householdId).order("created_at"),
-      supabase.from("shopping_items").select("id, title, quantity, completed_at").eq("household_id", householdId).order("created_at"),
+      loadTasks(householdId),
+      loadShoppingItems(householdId),
       userId ? loadFinance(householdId, userId) : Promise.resolve(demoFinance),
       userId ? loadFinancePeriod(householdId, userId, budgetPeriodMode, budgetYear) : Promise.resolve(createDemoPeriodFinance(budgetPeriodMode, budgetYear)),
       userId ? loadFinanceTransactions(householdId) : Promise.resolve(demoFinance.transactions),
       loadDocuments(householdId),
       loadSubscriptions(householdId),
       loadMealPlan(householdId, mondayFor()),
-    ]).then(([taskResult, shoppingResult, financeResult, financePeriodResult, transactionsResult, documentsResult, subscriptionsResult, mealPlanResult]) => {
+    ]).then(([taskItems, shoppingItems, financeResult, financePeriodResult, transactionsResult, documentsResult, subscriptionsResult, mealPlanResult]) => {
       if (!active) return;
-      if (taskResult.error || shoppingResult.error) {
-        setSyncState("error");
-        return;
-      }
-      setTasks((taskResult.data ?? []).map((item) => ({
-        id: item.id,
-        title: item.title,
-        meta: item.due_at ? new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short" }).format(new Date(item.due_at)) : "Ikke tildelt",
-        done: Boolean(item.completed_at),
-      })));
-      setShopping((shoppingResult.data ?? []).map((item) => ({
-        id: item.id,
-        title: item.title,
-        meta: item.quantity ?? undefined,
-        done: Boolean(item.completed_at),
-      })));
+      setTasks(taskItems);
+      setShopping(shoppingItems);
       setFinance(financeResult);
       setFinancePeriod(financePeriodResult);
       setFinanceTransactions(transactionsResult);
@@ -1405,11 +1487,27 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   }, [budgetPeriodMode, budgetYear, householdId]);
 
   useEffect(() => {
-    if (!householdId || !userId) return;
+    if (!householdId || !userId || !user) return;
     let active = true;
-    loadNotifications(householdId, userId).then((items) => { if (active) setNotifications(items); }).catch(() => { if (active) setSyncState("error"); });
+    Promise.all([
+      loadNotifications(householdId, userId),
+      loadNotificationPreferences(userId),
+      loadHouseholdAccess(householdId, user.id, user.email, user.displayName),
+    ]).then(([items, preferences, access]) => {
+      if (!active) return;
+      setNotifications(items);
+      setNotificationPreferences({ ...preferences, emailEnabled: false });
+      setTaskMembers(access.members.map((member) => ({ id: member.userId, name: member.name })));
+      setCanManageChecklists(access.isOwner);
+    }).catch(() => { if (active) setSyncState("error"); });
     return () => { active = false; };
-  }, [householdId, userId]);
+  }, [householdId, user, userId]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timeout = window.setTimeout(() => setToast(null), 3200);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
 
   const selectedCategory = finance.categories.find((category) => category.id === selectedCategoryId) ?? null;
   const title = useMemo(() => visibleNavItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view, visibleNavItems]);
@@ -1420,34 +1518,37 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
     ? financeSection === "budget" ? "Budget" : financeSection === "transactions" ? "Posteringer" : financeSection === "subscriptions" ? "Abonnementer" : financeSection === "category" ? selectedCategory?.name ?? "Kategori" : "Overblik"
     : view === "overview" ? `Godmorgen, ${firstName} 👋` : householdName;
   const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "MH";
-  const setLocalToggle = (setter: React.Dispatch<React.SetStateAction<ChecklistItem[]>>) => (id: ChecklistItem["id"]) => setter((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
-  const toggleTask = async (id: ChecklistItem["id"]) => {
+  const setLocalToggle = <T extends { id: string | number; done: boolean }>(setter: React.Dispatch<React.SetStateAction<T[]>>) => (id: string | number) => setter((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
+  const toggleTask = async (id: string | number) => {
     const current = tasks.find((item) => item.id === id);
     setTasks((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
     if (!householdId || typeof id !== "string" || !current) return;
     setSyncState("saving");
-    const { error } = await getSupabaseBrowserClient().from("tasks").update({ completed_at: current.done ? null : new Date().toISOString() }).eq("id", id).eq("household_id", householdId);
-    if (error) {
+    try {
+      await setTaskCompleted(householdId, id, !current.done);
+      setSyncState("synced");
+      setToast(current.done ? "Opgaven er genåbnet." : "Opgaven er markeret som færdig.");
+    } catch {
       setTasks((items) => items.map((item) => item.id === id ? current : item));
       setSyncState("error");
-    } else setSyncState("synced");
+    }
   };
-  const toggleShopping = async (id: ChecklistItem["id"]) => {
+  const toggleShopping = async (id: string | number) => {
     const current = shopping.find((item) => item.id === id);
     setShopping((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
     if (!householdId || typeof id !== "string" || !current) return;
     setSyncState("saving");
-    const { error } = await getSupabaseBrowserClient().from("shopping_items").update({ completed_at: current.done ? null : new Date().toISOString() }).eq("id", id).eq("household_id", householdId);
-    if (error) {
+    try {
+      await setShoppingItemCompleted(householdId, id, !current.done);
+      setSyncState("synced");
+    } catch {
       setShopping((items) => items.map((item) => item.id === id ? current : item));
       setSyncState("error");
-    } else setSyncState("synced");
+    }
   };
   const refreshShopping = async () => {
     if (!householdId) return;
-    const { data, error } = await getSupabaseBrowserClient().from("shopping_items").select("id, title, quantity, completed_at").eq("household_id", householdId).order("created_at");
-    if (error) { setSyncState("error"); return; }
-    setShopping((data ?? []).map((item) => ({ id: item.id, title: item.title, meta: item.quantity ?? undefined, done: Boolean(item.completed_at) })));
+    try { setShopping(await loadShoppingItems(householdId)); } catch { setSyncState("error"); }
   };
   const navigateFinance = (section: FinanceSection, categoryId: string | null = null) => {
     setView("finance");
@@ -1471,24 +1572,63 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   };
   const addItem = async (itemTitle: string) => {
     if (!householdId || !user) {
-      if (quickAdd === "task") setTasks((items) => [...items, { id: Date.now(), title: itemTitle, meta: "Ny · Ikke tildelt", done: false }]);
-      if (quickAdd === "shopping") setShopping((items) => [...items, { id: Date.now(), title: itemTitle, done: false }]);
+      if (quickAdd === "task") setTasks((items) => [...items, { id: Date.now(), title: itemTitle, description: null, assignedTo: null, assignedName: null, dueAt: null, recurrence: null, createdBy: user?.id ?? null, done: false }]);
+      if (quickAdd === "shopping") setShopping((items) => [...items, { id: Date.now(), title: itemTitle, quantity: null, createdBy: user?.id ?? null, done: false }]);
       setQuickAdd(null);
       return;
     }
     setSyncState("saving");
-    if (quickAdd === "task") {
-      const { data, error } = await getSupabaseBrowserClient().from("tasks").insert({ household_id: householdId, created_by: user.id, title: itemTitle }).select("id, title, completed_at").single();
-      if (error) { setSyncState("error"); return; }
-      setTasks((items) => [...items, { id: data.id, title: data.title, meta: "Ikke tildelt", done: Boolean(data.completed_at) }]);
+    try {
+      if (quickAdd === "task") { await saveTask(householdId, user.id, { title: itemTitle, description: null, assignedTo: null, dueAt: null }); setTasks(await loadTasks(householdId)); }
+      if (quickAdd === "shopping") { await saveShoppingItem(householdId, user.id, { title: itemTitle, quantity: null }); setShopping(await loadShoppingItems(householdId)); }
+      setSyncState("synced");
+      setQuickAdd(null);
+      setToast(quickAdd === "task" ? "Opgaven er oprettet." : "Varen er tilføjet.");
+    } catch { setSyncState("error"); }
+  };
+
+  const saveTaskItem = async (input: TaskInput, item?: TaskItem) => {
+    if (!householdId || !user) {
+      if (item) setTasks((items) => items.map((candidate) => candidate.id === item.id ? { ...candidate, ...input, assignedName: input.assignedTo === user?.id ? user.displayName : null } : candidate));
+      else setTasks((items) => [...items, { id: Date.now(), ...input, assignedName: input.assignedTo === user?.id ? user.displayName : null, recurrence: null, createdBy: user?.id ?? null, done: false }]);
+      setToast(item ? "Opgaven er opdateret." : "Opgaven er oprettet.");
+      return true;
     }
-    if (quickAdd === "shopping") {
-      const { data, error } = await getSupabaseBrowserClient().from("shopping_items").insert({ household_id: householdId, created_by: user.id, title: itemTitle }).select("id, title, quantity, completed_at").single();
-      if (error) { setSyncState("error"); return; }
-      setShopping((items) => [...items, { id: data.id, title: data.title, meta: data.quantity ?? undefined, done: Boolean(data.completed_at) }]);
+    setSyncState("saving");
+    try {
+      await saveTask(householdId, user.id, input, typeof item?.id === "string" ? item.id : undefined);
+      setTasks(await loadTasks(householdId));
+      setSyncState("synced");
+      setToast(item ? "Opgaven er opdateret." : "Opgaven er oprettet.");
+      return true;
+    } catch { setSyncState("error"); return false; }
+  };
+  const removeTaskItem = async (item: TaskItem) => {
+    if (!householdId || typeof item.id !== "string") { setTasks((items) => items.filter((candidate) => candidate.id !== item.id)); setToast("Opgaven er slettet."); return true; }
+    setSyncState("saving");
+    try { await deleteTask(householdId, item.id); setTasks(await loadTasks(householdId)); setSyncState("synced"); setToast("Opgaven er slettet."); return true; } catch { setSyncState("error"); return false; }
+  };
+  const saveShoppingListItem = async (input: ShoppingInput, item?: ShoppingListItem) => {
+    if (!householdId || !user) {
+      if (item) setShopping((items) => items.map((candidate) => candidate.id === item.id ? { ...candidate, ...input } : candidate));
+      else setShopping((items) => [...items, { id: Date.now(), ...input, createdBy: user?.id ?? null, done: false }]);
+      setToast(item ? "Varen er opdateret." : "Varen er tilføjet.");
+      return true;
     }
-    setSyncState("synced");
-    setQuickAdd(null);
+    setSyncState("saving");
+    try { await saveShoppingItem(householdId, user.id, input, typeof item?.id === "string" ? item.id : undefined); setShopping(await loadShoppingItems(householdId)); setSyncState("synced"); setToast(item ? "Varen er opdateret." : "Varen er tilføjet."); return true; } catch { setSyncState("error"); return false; }
+  };
+  const removeShoppingListItem = async (item: ShoppingListItem) => {
+    if (!householdId || typeof item.id !== "string") { setShopping((items) => items.filter((candidate) => candidate.id !== item.id)); setToast("Varen er slettet."); return true; }
+    setSyncState("saving");
+    try { await deleteShoppingItem(householdId, item.id); setShopping(await loadShoppingItems(householdId)); setSyncState("synced"); setToast("Varen er slettet."); return true; } catch { setSyncState("error"); return false; }
+  };
+  const clearCompletedShopping = async () => {
+    if (!householdId) { setShopping((items) => items.filter((item) => !item.done)); setToast("Købte varer er ryddet."); return true; }
+    const deletableIds = shopping.filter((item) => item.done && typeof item.id === "string" && (canManageChecklists || item.createdBy === userId)).map((item) => item.id as string);
+    if (!deletableIds.length) { setToast("Kun opretteren eller husstandens ejer kan rydde disse varer."); return false; }
+    setSyncState("saving");
+    try { await clearCompletedShoppingItems(householdId, deletableIds); setShopping(await loadShoppingItems(householdId)); setSyncState("synced"); setToast(deletableIds.length === 1 ? "Den købte vare er ryddet." : `${deletableIds.length} købte varer er ryddet.`); return true; } catch { setSyncState("error"); return false; }
   };
   const openNewTransaction = (categoryId: string | null = null, direction: "expense" | "income" = "expense") => { setEditingTransaction(null); setTransactionCategoryId(categoryId); setTransactionDirection(direction); setTransactionOpen(true); };
   const openTransaction = (transaction: FinanceTransaction) => { setEditingTransaction(transaction); setTransactionCategoryId(transaction.categoryId); setTransactionDirection(transaction.direction); setTransactionOpen(true); };
@@ -1656,6 +1796,22 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       window.setTimeout(() => setPrintTarget(null), 250);
     }, 80);
   };
+  const updateNotificationPreferences = async (preferences: NotificationPreferences) => {
+    const next = { ...preferences, emailEnabled: false };
+    setNotificationPreferences(next);
+    if (!userId) return;
+    setSyncState("saving");
+    try { await saveNotificationPreferences(userId, next); setSyncState("synced"); setToast("Notifikationsvalg er gemt."); } catch { setSyncState("error"); }
+  };
+  const requestPasswordReset = async () => {
+    if (!user?.email) return;
+    setAccountMessage(null);
+    try {
+      const { error } = await getSupabaseBrowserClient().auth.resetPasswordForEmail(user.email, { redirectTo: new URL("/?auth=recovery", window.location.origin).toString() });
+      if (error) throw error;
+      setAccountMessage("Linket er sendt. Brug altid den nyeste mail i din indbakke.");
+    } catch { setAccountMessage("Linket kunne ikke sendes lige nu. Prøv igen om lidt."); }
+  };
 
   return (
     <div className="app-root" data-color-mode={resolvedAppearance} data-template={template} data-print-target={printTarget ?? "none"}>
@@ -1691,10 +1847,10 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
           <button aria-label="Åbn menu" className="menu-button" onClick={() => setMobileMenu((open) => !open)} type="button"><Menu size={21} /></button>
           <div><small>{topbarHeading}</small><strong>{topbarSubheading}</strong></div>
           <div className="top-actions">
-            <div className="export-wrap">
+            {view === "finance" || view === "meals" ? <div className="export-wrap">
               <button className="export-button" onClick={() => setExportOpen((open) => !open)} type="button"><Download size={16} /><span>Eksportér</span><ChevronDown size={13} /></button>
-              {exportOpen ? <ExportMenu onExport={exportPdf} /> : null}
-            </div>
+              {exportOpen ? <ExportMenu onExport={exportPdf} target={view === "meals" ? "meal" : "budget"} /> : null}
+            </div> : null}
             <button
               aria-label={resolvedAppearance === "dark" ? "Skift til lyst tema" : "Skift til mørkt tema"}
               className="mode-button"
@@ -1705,13 +1861,13 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
               {resolvedAppearance === "dark" ? <Sun size={19} /> : <Moon size={19} />}
             </button>
             {actions.length || notifications.length ? <div className="notification-wrap"><button aria-label={`${actions.length + notifications.filter((item) => !item.readAt).length} notifikationer`} className="notification-button" onClick={() => setNotificationOpen((open) => !open)} type="button"><Bell size={19} />{actions.length + notifications.filter((item) => !item.readAt).length ? <b>{actions.length + notifications.filter((item) => !item.readAt).length}</b> : null}</button>{notificationOpen ? <section className="notification-center"><header><strong>Notifikationer</strong><span>{notifications.filter((item) => !item.readAt).length} ulæste</span></header>{notifications.length ? notifications.map((item) => <button className={item.readAt ? "read" : ""} key={item.id} onClick={() => { if (userId && !item.readAt) void markNotificationRead(item.id, userId).then(() => setNotifications((current) => current.map((entry) => entry.id === item.id ? { ...entry, readAt: new Date().toISOString() } : entry))); }} type="button"><strong>{item.title}</strong><span>{item.body || "Kalenderpåmindelse"}</span><time>{new Intl.DateTimeFormat("da-DK", { dateStyle: "short", timeStyle: "short" }).format(new Date(item.createdAt))}</time></button>) : <div className="empty-state"><Bell size={17} />Ingen notifikationer endnu</div>}</section> : null}</div> : null}
-            {householdId ? <span className={`sync-status ${syncState}`}>{syncState === "loading" ? "Henter…" : syncState === "saving" ? "Gemmer…" : syncState === "error" ? "Synkronisering fejlede" : "Synkroniseret"}</span> : null}
+            {householdId ? <span aria-live="polite" className={`sync-status ${syncState}`} role="status">{syncState === "loading" ? "Henter…" : syncState === "saving" ? "Gemmer…" : syncState === "error" ? "Synkronisering fejlede" : "Synkroniseret"}</span> : null}
             <button className="profile-button" type="button"><span>{initials}</span><strong>{firstName}</strong><ChevronDown size={14} /></button>
           </div>
         </header>
 
         <main>
-          {view === "overview" ? <Overview finance={finance} actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} /> : null}
+          {view === "overview" ? <Overview finance={finance} actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openIncome={() => openNewTransaction(null, "income")} sampleMode={!householdId} mealItems={mealPrintItems} dataReady={!householdId || syncState === "synced"} /> : null}
           {view === "finance" ? (
             <div className="finance-area">
               {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} /> : null}
@@ -1722,11 +1878,13 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
               {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
             </div>
           ) : null}
-          {["documents", "tasks", "shopping"].includes(view) ? <CollectionView view={view as Exclude<View, "overview" | "finance" | "settings">} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} sampleMode={!householdId} /> : null}
+          {view === "documents" ? <CollectionView view="documents" tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} sampleMode={!householdId} /> : null}
+          {view === "tasks" ? <TasksView currentUserId={userId} isOwner={canManageChecklists} members={taskMembers} onDelete={removeTaskItem} onSave={saveTaskItem} onToggle={(item) => householdId ? toggleTask(item.id) : setLocalToggle(setTasks)(item.id)} tasks={tasks} /> : null}
+          {view === "shopping" ? <ShoppingView currentUserId={userId} isOwner={canManageChecklists} items={shopping} onClearCompleted={clearCompletedShopping} onDelete={removeShoppingListItem} onSave={saveShoppingListItem} onToggle={(item) => householdId ? toggleShopping(item.id) : setLocalToggle(setShopping)(item.id)} /> : null}
           {view === "calendar" ? <CalendarView householdId={householdId} onSyncState={setSyncState} userId={user?.id} /> : null}
           {view === "meals" ? <MealPlanView householdId={householdId} onItemsChange={(items, weekStart) => { setMealPrintItems(items); setMealPrintWeekStart(weekStart); }} onShoppingChanged={() => void refreshShopping()} onSyncState={setSyncState} userId={user?.id} /> : null}
           {view === "household" ? <HouseholdView householdId={householdId} householdName={householdName} onSyncState={setSyncState} user={user} /> : null}
-          {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} setLanguage={setLanguage} appearance={appearance} setAppearance={setAppearance} /> : null}
+          {view === "settings" ? <SettingsView template={template} setTemplate={setTemplate} language={language} appearance={appearance} setAppearance={setAppearance} notificationPreferences={notificationPreferences} onNotificationPreferencesChange={updateNotificationPreferences} accountEmail={user?.email} onRequestPasswordReset={requestPasswordReset} accountMessage={accountMessage} /> : null}
         </main>
       </div>
 
@@ -1740,6 +1898,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       {subscriptionOpen ? <SubscriptionModal documents={householdDocuments} initial={editingSubscription} onClose={() => { setSubscriptionOpen(false); setEditingSubscription(null); }} onDelete={removeSubscription} onOpenDocument={openDocument} onSave={saveSubscription} transactions={financeTransactions} /> : null}
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = Boolean(await saveFinanceCategory(name, categoryType)); if (saved) setCategoryOpen(false); return saved; }} /> : null}
       {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
+      {toast ? <div aria-live="polite" className="app-toast" role="status"><Check size={16} />{toast}</div> : null}
       <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} mealItems={mealPrintItems} mealWeekStart={mealPrintWeekStart} sampleMode={!householdId} />
     </div>
   );
