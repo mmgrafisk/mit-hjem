@@ -184,15 +184,42 @@ export type Database = {
           { foreignKeyName: "calendar_event_reminders_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] },
         ]
       }
+      document_folders: {
+        Row: { color: string; created_at: string; created_by: string; household_id: string; id: string; name: string; updated_at: string }
+        Insert: { color?: string; created_at?: string; created_by: string; household_id: string; id?: string; name: string; updated_at?: string }
+        Update: { color?: string; created_at?: string; created_by?: string; household_id?: string; id?: string; name?: string; updated_at?: string }
+        Relationships: [{ foreignKeyName: "document_folders_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] }]
+      }
+      document_tags: {
+        Row: { color: string; created_at: string; created_by: string; household_id: string; id: string; name: string; normalized_name: string }
+        Insert: { color?: string; created_at?: string; created_by: string; household_id: string; id?: string; name: string; normalized_name?: string }
+        Update: { color?: string; created_at?: string; created_by?: string; household_id?: string; id?: string; name?: string; normalized_name?: string }
+        Relationships: [{ foreignKeyName: "document_tags_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] }]
+      }
+      document_tag_links: {
+        Row: { created_at: string; created_by: string; document_id: string; household_id: string; tag_id: string }
+        Insert: { created_at?: string; created_by: string; document_id: string; household_id: string; tag_id: string }
+        Update: { created_at?: string; created_by?: string; document_id?: string; household_id?: string; tag_id?: string }
+        Relationships: [
+          { foreignKeyName: "document_tag_links_document_id_household_id_fkey"; columns: ["document_id", "household_id"]; isOneToOne: false; referencedRelation: "documents"; referencedColumns: ["id", "household_id"] },
+          { foreignKeyName: "document_tag_links_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] },
+          { foreignKeyName: "document_tag_links_tag_id_household_id_fkey"; columns: ["tag_id", "household_id"]; isOneToOne: false; referencedRelation: "document_tags"; referencedColumns: ["id", "household_id"] },
+        ]
+      }
       documents: {
         Row: {
+          archived_at: string | null
           created_at: string
           created_by: string
+          document_date: string | null
+          expires_on: string | null
           extracted_text: string | null
+          folder_id: string | null
           household_id: string
           id: string
           kind: string
           mime_type: string
+          notes: string | null
           owner_user_id: string
           processing_status: string
           size_bytes: number
@@ -202,13 +229,18 @@ export type Database = {
           visibility: string
         }
         Insert: {
+          archived_at?: string | null
           created_at?: string
           created_by: string
+          document_date?: string | null
+          expires_on?: string | null
           extracted_text?: string | null
+          folder_id?: string | null
           household_id: string
           id?: string
           kind?: string
           mime_type: string
+          notes?: string | null
           owner_user_id: string
           processing_status?: string
           size_bytes: number
@@ -218,13 +250,18 @@ export type Database = {
           visibility?: string
         }
         Update: {
+          archived_at?: string | null
           created_at?: string
           created_by?: string
+          document_date?: string | null
+          expires_on?: string | null
           extracted_text?: string | null
+          folder_id?: string | null
           household_id?: string
           id?: string
           kind?: string
           mime_type?: string
+          notes?: string | null
           owner_user_id?: string
           processing_status?: string
           size_bytes?: number
@@ -234,6 +271,13 @@ export type Database = {
           visibility?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "documents_folder_household_fkey"
+            columns: ["folder_id", "household_id"]
+            isOneToOne: false
+            referencedRelation: "document_folders"
+            referencedColumns: ["id", "household_id"]
+          },
           {
             foreignKeyName: "documents_household_id_fkey"
             columns: ["household_id"]
@@ -771,6 +815,16 @@ export type Database = {
           },
         ]
       }
+      task_documents: {
+        Row: { created_at: string; created_by: string; document_id: string; household_id: string; task_id: string }
+        Insert: { created_at?: string; created_by: string; document_id: string; household_id: string; task_id: string }
+        Update: { created_at?: string; created_by?: string; document_id?: string; household_id?: string; task_id?: string }
+        Relationships: [
+          { foreignKeyName: "task_documents_document_id_household_id_fkey"; columns: ["document_id", "household_id"]; isOneToOne: false; referencedRelation: "documents"; referencedColumns: ["id", "household_id"] },
+          { foreignKeyName: "task_documents_household_id_fkey"; columns: ["household_id"]; isOneToOne: false; referencedRelation: "households"; referencedColumns: ["id"] },
+          { foreignKeyName: "task_documents_task_id_household_id_fkey"; columns: ["task_id", "household_id"]; isOneToOne: false; referencedRelation: "tasks"; referencedColumns: ["id", "household_id"] },
+        ]
+      }
       household_invitations: {
         Row: {
           accepted_at: string | null
@@ -972,6 +1026,24 @@ export type Database = {
           p_budget_ids: string[]
           p_category_id: string
           p_household_id: string
+        }
+        Returns: undefined
+      }
+      update_document_archive_metadata: {
+        Args: {
+          p_document_date: string | null
+          p_document_id: string
+          p_expires_on: string | null
+          p_folder_id: string | null
+          p_household_id: string
+          p_kind: string
+          p_notes: string | null
+          p_subscription_ids: string[]
+          p_tag_names: string[]
+          p_task_ids: string[]
+          p_title: string
+          p_transaction_ids: string[]
+          p_visibility: string
         }
         Returns: undefined
       }

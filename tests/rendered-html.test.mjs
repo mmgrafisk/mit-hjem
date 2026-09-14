@@ -117,20 +117,28 @@ test("persists selectable periods and renders one transaction-based budget table
 });
 
 test("keeps household documents private and downloadable through signed links", async () => {
-  const [app, documentData, migration] = await Promise.all([
+  const [app, archiveView, documentData, storageMigration, archiveMigration] = await Promise.all([
     readFile(new URL("../app/household-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/document-library-view.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/documents-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/20260831064746_protect_private_document_storage.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/20260913101706_extend_document_archive.sql", import.meta.url), "utf8"),
   ]);
 
-  assert.match(app, /DocumentUploadModal/);
-  assert.match(app, /Søg i dokumenter/);
+  assert.match(app, /DocumentLibraryView/);
+  assert.match(archiveView, /Søg i titel, tags eller noter/);
+  assert.match(archiveView, /Forbind dokumentet/);
+  assert.match(archiveView, /Udløbne og snart udløbne/);
   assert.match(documentData, /household-documents/);
   assert.match(documentData, /createSignedUrl/);
   assert.match(documentData, /20 \* 1024 \* 1024/);
-  assert.match(migration, /exists \(/);
-  assert.match(migration, /public\.documents/);
-  assert.doesNotMatch(documentData, /getPublicUrl|service[_-]?role|secret[_-]?key/i);
+  assert.match(storageMigration, /exists \(/);
+  assert.match(storageMigration, /public\.documents/);
+  assert.match(archiveMigration, /enable row level security/g);
+  assert.match(archiveMigration, /security invoker/i);
+  assert.match(archiveMigration, /revoke all on function public\.update_document_archive_metadata[\s\S]*?from public, anon/i);
+  assert.match(archiveMigration, /document\.visibility = 'household' or document\.owner_user_id/);
+  assert.doesNotMatch(`${documentData}\n${archiveView}`, /getPublicUrl|service[_-]?role|secret[_-]?key/i);
 });
 
 test("keeps templates, languages and printable exports configurable", async () => {

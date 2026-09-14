@@ -6,6 +6,7 @@ import { aggregateIngredients, mergeShoppingQuantity, nextMealSlot, parseShoppin
 import { dueReminderOccurrences, type ReminderEvent } from "../supabase/functions/_shared/calendar-recurrence";
 import { reminderChannelIsAvailable } from "../supabase/functions/_shared/reminder-channels";
 import { taskMeta, type TaskItem } from "../app/checklist-data";
+import { documentExpiryState, normalizeDocumentTags } from "../app/documents-data";
 
 process.env.TZ = "Europe/Copenhagen";
 
@@ -13,6 +14,21 @@ test("opgaver viser ansvarlig eller en ærlig tom frist", () => {
   const base: TaskItem = { id: "task-1", title: "Bestil service", description: null, assignedTo: null, assignedName: null, dueAt: null, recurrence: null, createdBy: "user-1", done: false };
   assert.equal(taskMeta(base), "Ingen frist");
   assert.equal(taskMeta({ ...base, assignedTo: "user-1", assignedName: "Michael" }), "Michael");
+});
+
+test("dokumenttags renses, deduplikeres og begrænses", () => {
+  const tags = normalizeDocumentTags([" Bolig, Forsikring ", "bolig", "", ...Array.from({ length: 20 }, (_, index) => `Tag ${index}`)]);
+  assert.deepEqual(tags.slice(0, 2), ["Bolig", "Forsikring"]);
+  assert.equal(tags.length, 12);
+  assert.equal(tags.filter((tag) => tag.toLocaleLowerCase("da-DK") === "bolig").length, 1);
+});
+
+test("dokumentfrister beregnes i dansk tidszone", () => {
+  const now = new Date("2026-09-13T22:30:00.000Z");
+  assert.equal(documentExpiryState(null, now), "none");
+  assert.equal(documentExpiryState("2026-09-13", now), "expired");
+  assert.equal(documentExpiryState("2026-09-14", now), "soon");
+  assert.equal(documentExpiryState("2026-11-15", now), "none");
 });
 
 function event(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
@@ -154,4 +170,17 @@ test("førstegangsoprettelse af husstand er atomisk og kun tilgængelig efter lo
   assert.match(sql, /security invoker/i);
   assert.match(sql, /revoke all .* public, anon/i);
   assert.match(sql, /grant execute .* authenticated/i);
+});
+
+test("dokumentarkivet er husstandsafgrænset og skjuler private relationer", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260913101706_extend_document_archive.sql", import.meta.url), "utf8");
+  assert.match(sql, /create table public\.document_folders/i);
+  assert.match(sql, /create table public\.document_tags/i);
+  assert.match(sql, /create table public\.task_documents/i);
+  assert.match(sql, /foreign key \(document_id, household_id\)/i);
+  assert.match(sql, /alter table public\.document_tag_links enable row level security/i);
+  assert.match(sql, /document\.visibility = 'household' or document\.owner_user_id = \(select auth\.uid\(\)\)/i);
+  assert.match(sql, /security invoker/i);
+  assert.match(sql, /revoke all on function public\.update_document_archive_metadata[\s\S]*?from public, anon/i);
+  assert.match(sql, /grant execute on function public\.update_document_archive_metadata[\s\S]*?to authenticated/i);
 });

@@ -63,15 +63,20 @@ import {
 } from "./checklist-data";
 import { ShoppingView, TasksView, type TaskMemberOption } from "./checklist-views";
 import {
+  createDocumentFolder,
   createDocumentUrl,
   documentKindLabel,
   documentMeta,
+  loadDocumentFolders,
   loadDocuments,
+  setDocumentArchived,
+  updateDocumentArchive,
   uploadDocument,
-  type DocumentKind,
-  type DocumentVisibility,
+  type DocumentArchiveInput,
+  type DocumentFolder,
   type HouseholdDocument,
 } from "./documents-data";
+import { DocumentLibraryView, type DocumentRelationGroups } from "./document-library-view";
 import {
   addFinanceCategory,
   addFinanceTransaction,
@@ -191,10 +196,16 @@ const demoFinance: FinanceSnapshot = {
 };
 
 const demoDocuments: HouseholdDocument[] = [
-  { id: "demo-doc-1", title: "Faktura · Norlys", kind: "invoice", visibility: "household", mimeType: "application/pdf", sizeBytes: 182000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-23T10:00:00Z" },
-  { id: "demo-doc-2", title: "Kvittering · Rema 1000", kind: "receipt", visibility: "household", mimeType: "image/jpeg", sizeBytes: 640000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-19T12:00:00Z" },
-  { id: "demo-doc-3", title: "Forsikring · Police", kind: "insurance", visibility: "household", mimeType: "application/pdf", sizeBytes: 1240000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-11T09:00:00Z" },
-  { id: "demo-doc-4", title: "Lønseddel · Anders", kind: "payslip", visibility: "private", mimeType: "application/pdf", sizeBytes: 242000, storagePath: "", processingStatus: "ready", createdAt: "2025-05-01T08:00:00Z" },
+  { id: "demo-doc-1", title: "Faktura · Norlys", kind: "invoice", visibility: "household", mimeType: "application/pdf", sizeBytes: 182000, storagePath: "", processingStatus: "ready", folderId: "demo-folder-home", folderName: "Bolig", folderColor: "#2864f0", documentDate: "2025-05-23", expiresOn: null, notes: "Elregning for maj.", archivedAt: null, createdBy: "demo-user", createdAt: "2025-05-23T10:00:00Z", tags: [{ id: "demo-tag-1", name: "Energi", color: "#7c6ee6" }], linkedTransactionIds: ["demo-1"], linkedSubscriptionIds: ["demo-sub-1"], linkedTaskIds: [] },
+  { id: "demo-doc-2", title: "Kvittering · Rema 1000", kind: "receipt", visibility: "household", mimeType: "image/jpeg", sizeBytes: 640000, storagePath: "", processingStatus: "ready", folderId: "demo-folder-receipts", folderName: "Kvitteringer", folderColor: "#20a874", documentDate: "2025-05-19", expiresOn: null, notes: null, archivedAt: null, createdBy: "demo-user", createdAt: "2025-05-19T12:00:00Z", tags: [{ id: "demo-tag-2", name: "Dagligvarer", color: "#7c6ee6" }], linkedTransactionIds: ["demo-2"], linkedSubscriptionIds: [], linkedTaskIds: [] },
+  { id: "demo-doc-3", title: "Husforsikring · Police", kind: "insurance", visibility: "household", mimeType: "application/pdf", sizeBytes: 1240000, storagePath: "", processingStatus: "ready", folderId: "demo-folder-home", folderName: "Bolig", folderColor: "#2864f0", documentDate: "2025-05-11", expiresOn: "2026-10-01", notes: "Årlig fornyelse.", archivedAt: null, createdBy: "demo-user", createdAt: "2025-05-11T09:00:00Z", tags: [{ id: "demo-tag-3", name: "Forsikring", color: "#7c6ee6" }], linkedTransactionIds: [], linkedSubscriptionIds: [], linkedTaskIds: [] },
+  { id: "demo-doc-4", title: "Lønseddel · Anders", kind: "payslip", visibility: "private", mimeType: "application/pdf", sizeBytes: 242000, storagePath: "", processingStatus: "ready", folderId: "demo-folder-finance", folderName: "Privatøkonomi", folderColor: "#8267df", documentDate: "2025-05-01", expiresOn: null, notes: null, archivedAt: null, createdBy: "demo-user", createdAt: "2025-05-01T08:00:00Z", tags: [], linkedTransactionIds: [], linkedSubscriptionIds: [], linkedTaskIds: [] },
+];
+
+const demoDocumentFolders: DocumentFolder[] = [
+  { id: "demo-folder-home", name: "Bolig", color: "#2864f0" },
+  { id: "demo-folder-receipts", name: "Kvitteringer", color: "#20a874" },
+  { id: "demo-folder-finance", name: "Privatøkonomi", color: "#8267df" },
 ];
 
 const demoSubscriptions: Subscription[] = [
@@ -787,75 +798,6 @@ function BudgetView({
   );
 }
 
-function CollectionView({
-  view,
-  tasks,
-  shopping,
-  documents,
-  toggleTask,
-  toggleShopping,
-  openUpload,
-  openDocument,
-  openAdd,
-  member,
-  sampleMode,
-}: {
-  view: Exclude<View, "overview" | "finance" | "settings">;
-  tasks: ChecklistItem[];
-  shopping: ChecklistItem[];
-  documents: HouseholdDocument[];
-  toggleTask: (id: ChecklistItem["id"]) => void;
-  toggleShopping: (id: ChecklistItem["id"]) => void;
-  openUpload: () => void;
-  openDocument: (document: HouseholdDocument) => void | Promise<void>;
-  openAdd: (kind: "task" | "shopping") => void;
-  member?: { name: string; email: string };
-  sampleMode: boolean;
-}) {
-  const [documentQuery, setDocumentQuery] = useState("");
-  const labels: Record<typeof view, [string, string]> = {
-    documents: ["Dokumenter", "Søg, organiser og forbind husholdningens vigtige papirer."],
-    tasks: ["Opgaver", "Fordel arbejdet og få de gentagne ting til at ske til tiden."],
-    calendar: ["Kalender", "Et fælles årshjul for aftaler, frister og vedligehold."],
-    shopping: ["Indkøb", "En levende liste, som også kan bygges direkte fra madplanen."],
-    meals: ["Madplan", "Planlæg ugen, justér portioner og gør indkøbet enkelt."],
-    household: ["Husstanden", "Medlemmer, roller og adgang til fælles eller private områder."],
-  };
-  const [, intro] = labels[view];
-  const visibleDocuments = documents.filter((document) => `${document.title} ${documentKindLabel(document.kind)}`.toLocaleLowerCase("da-DK").includes(documentQuery.trim().toLocaleLowerCase("da-DK")));
-  const visibleCalendarItems = sampleMode ? calendarItems : [];
-  const visibleMeals = sampleMode ? meals : [];
-
-  return (
-    <div className="collection-page">
-      <div className="module-intro"><p>{intro}</p></div>
-      {view === "documents" ? (
-        <Panel className="wide-panel collection-main">
-          <div className="toolbar"><label><Search size={16} /><input aria-label="Søg i dokumenter" onChange={(event) => setDocumentQuery(event.target.value)} placeholder="Søg i dokumenter" value={documentQuery} /></label><button onClick={openUpload} type="button"><Upload size={15} /> Upload</button></div>
-          <div className="document-list large">
-            {visibleDocuments.map((document, index) => <button key={document.id} onClick={() => void openDocument(document)} type="button"><span className={`file-icon file-${(index % 4) + 1}`}><FileText size={18} /></span><span><strong>{document.title}</strong><small>{documentMeta(document)}</small></span><b>{document.visibility === "private" ? "Privat" : "Husstanden"}</b><ChevronRight size={16} /></button>)}
-            {visibleDocuments.length === 0 ? <div className="empty-state"><FileText size={18} /> {documentQuery ? "Ingen dokumenter matcher søgningen" : "Upload jeres første dokument"}</div> : null}
-          </div>
-        </Panel>
-      ) : null}
-      {view === "tasks" ? <Panel className="wide-panel collection-main"><div className="check-list large">{tasks.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleTask} />)}{tasks.length === 0 ? <div className="empty-state"><CheckSquare size={18} />Ingen opgaver endnu</div> : null}</div></Panel> : null}
-      {view === "shopping" ? <Panel className="wide-panel collection-main"><div className="check-list large">{shopping.map((item) => <CheckRow item={item} key={item.id} onToggle={toggleShopping} />)}{shopping.length === 0 ? <div className="empty-state"><ShoppingCart size={18} />Indkøbslisten er tom</div> : null}</div></Panel> : null}
-      {view === "calendar" ? <Panel className="wide-panel collection-main"><div className="calendar-list large">{visibleCalendarItems.map(([day, time, item, tone]) => <button type="button" key={`${day}-${time}`}><span className={`timeline-dot dot-${tone}`} /><time>{day}</time><b>{time}</b><span>{item}</span></button>)}{visibleCalendarItems.length === 0 ? <div className="empty-state"><CalendarDays size={18} />Ingen aftaler endnu</div> : null}</div></Panel> : null}
-      {view === "meals" ? <Panel className="wide-panel collection-main"><div className="meal-strip large">{visibleMeals.map(([day, meal, duration], index) => <button type="button" key={day}><small>{day}</small><span className={`meal-visual meal-${index + 1}`} /><strong>{meal}</strong><em>{duration}</em></button>)}{visibleMeals.length === 0 ? <div className="empty-state"><UtensilsCrossed size={18} />Ingen måltider planlagt endnu</div> : null}</div></Panel> : null}
-      {view === "household" ? (
-        <div className="member-grid collection-main">
-          {member ? <Panel><span className="member-avatar">{member.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><h2>{member.name}</h2><p>{member.email} · Ejer</p></Panel> : <div className="empty-state"><Users size={18} />Ingen medlemmer at vise</div>}
-        </div>
-      ) : null}
-      <aside className="collection-aside">
-        <Panel><small>Overblik</small><strong className="aside-value">{view === "documents" ? documents.length : view === "tasks" ? tasks.filter((item) => !item.done).length : view === "shopping" ? shopping.filter((item) => !item.done).length : view === "calendar" ? visibleCalendarItems.length : view === "meals" ? visibleMeals.length : member ? 1 : 0}</strong><p>{view === "documents" ? "dokumenter i arkivet" : view === "tasks" ? "åbne opgaver" : view === "shopping" ? "varer mangler" : view === "calendar" ? "aftaler i visningen" : view === "meals" ? "dage planlagt" : "aktivt medlem"}</p></Panel>
-        {view === "documents" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={openUpload} type="button"><Upload size={15} />Upload dokument</button><p className="aside-empty">Dokumenter kan nu forbindes med posteringer og abonnementer.</p></Panel> : null}
-        {view === "tasks" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={() => openAdd("task")} type="button"><Plus size={15} />Ny opgave</button></Panel> : null}
-        {view === "shopping" ? <Panel><SectionTitle title="Hurtig handling" /><button className="panel-primary-action" onClick={() => openAdd("shopping")} type="button"><Plus size={15} />Tilføj vare</button></Panel> : null}
-      </aside>
-    </div>
-  );
-}
 
 function SettingsView({
   template,
@@ -1211,55 +1153,6 @@ function SubscriptionModal({ initial, transactions, documents, onClose, onDelete
   </form></div>;
 }
 
-function DocumentUploadModal({
-  onClose,
-  onUpload,
-}: {
-  onClose: () => void;
-  onUpload: (file: File, title: string, kind: DocumentKind, visibility: DocumentVisibility) => Promise<string | null>;
-}) {
-  const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState("");
-  const [kind, setKind] = useState<DocumentKind>("other");
-  const [visibility, setVisibility] = useState<DocumentVisibility>("household");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const dialogRef = useModalAccessibility(onClose, busy);
-  const kinds: DocumentKind[] = ["invoice", "receipt", "insurance", "payslip", "contract", "warranty", "other"];
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
-      <form aria-labelledby="document-upload-title" aria-modal="true" className="quick-modal transaction-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => {
-        event.preventDefault();
-        if (!file || !title.trim()) { setError("Vælg en fil og giv dokumentet et navn."); return; }
-        setBusy(true);
-        setError(null);
-        const uploadError = await onUpload(file, title.trim(), kind, visibility);
-        if (uploadError) setError(uploadError);
-        setBusy(false);
-      }} ref={dialogRef as React.RefObject<HTMLFormElement | null>} role="dialog">
-        <button aria-label="Luk" className="modal-close" onClick={onClose} type="button"><X size={18} /></button>
-        <span className="modal-icon"><Upload size={20} /></span>
-        <div><h2 id="document-upload-title">Upload dokument</h2><p className="modal-intro">PDF, billeder, Word eller Excel · højst 20 MB.</p></div>
-        <label className="file-drop">
-          <Upload size={22} />
-          <strong>{file ? file.name : "Vælg dokument"}</strong>
-          <small>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB` : "Klik for at vælge en fil"}</small>
-          <input accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,.xlsx" onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; setFile(nextFile); if (nextFile && !title) setTitle(nextFile.name.replace(/\.[^.]+$/, "")); }} required type="file" />
-        </label>
-        <div className="transaction-grid">
-          <label className="wide">Titel<input maxLength={200} onChange={(event) => setTitle(event.target.value)} placeholder="Fx Elregning august" required value={title} /></label>
-          <label>Type<select onChange={(event) => setKind(event.target.value as DocumentKind)} value={kind}>{kinds.map((value) => <option key={value} value={value}>{documentKindLabel(value)}</option>)}</select></label>
-          <label>Adgang<select onChange={(event) => setVisibility(event.target.value as DocumentVisibility)} value={visibility}><option value="household">Hele husstanden</option><option value="private">Kun mig</option></select></label>
-        </div>
-        <p className="privacy-note">{visibility === "private" ? "Privat: kun du kan åbne dokumentet." : "Delt: alle medlemmer af husstanden kan åbne dokumentet."}</p>
-        {error ? <p className="modal-error" role="alert">{error}</p> : null}
-        <button className="primary-button" disabled={busy} type="submit">{busy ? "Uploader…" : "Gem dokument"}</button>
-      </form>
-    </div>
-  );
-}
-
 function PrintSheets({ tasks, shopping, financePeriod, householdName, mealItems, mealWeekStart, sampleMode }: { tasks: ChecklistItem[]; shopping: ChecklistItem[]; financePeriod: FinancePeriodSnapshot; householdName: string; mealItems: MealPlanItem[]; mealWeekStart: string; sampleMode: boolean }) {
   const incomeRows = financePeriod.transactionRows.filter((row) => row.transaction.direction === "income");
   const expenseGroups = financePeriod.categories.map((category) => ({ category, rows: financePeriod.transactionRows.filter((row) => row.transaction.direction === "expense" && (category.id === "uncategorized" ? !row.transaction.categoryId : row.transaction.categoryId === category.id)) }));
@@ -1347,6 +1240,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   const [tasks, setTasks] = useState<TaskItem[]>(householdId ? [] : demoTasks);
   const [shopping, setShopping] = useState<ShoppingListItem[]>(householdId ? [] : demoShopping);
   const [householdDocuments, setHouseholdDocuments] = useState<HouseholdDocument[]>(householdId ? [] : demoDocuments);
+  const [documentFolders, setDocumentFolders] = useState<DocumentFolder[]>(householdId ? [] : demoDocumentFolders);
   const [finance, setFinance] = useState<FinanceSnapshot>(() => householdId ? {
     ...demoFinance,
     budgetId: "",
@@ -1460,9 +1354,10 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       userId ? loadFinancePeriod(householdId, userId, budgetPeriodMode, budgetYear) : Promise.resolve(createDemoPeriodFinance(budgetPeriodMode, budgetYear)),
       userId ? loadFinanceTransactions(householdId) : Promise.resolve(demoFinance.transactions),
       loadDocuments(householdId),
+      loadDocumentFolders(householdId),
       loadSubscriptions(householdId),
       loadMealPlan(householdId, mondayFor()),
-    ]).then(([taskItems, shoppingItems, financeResult, financePeriodResult, transactionsResult, documentsResult, subscriptionsResult, mealPlanResult]) => {
+    ]).then(([taskItems, shoppingItems, financeResult, financePeriodResult, transactionsResult, documentsResult, foldersResult, subscriptionsResult, mealPlanResult]) => {
       if (!active) return;
       setTasks(taskItems);
       setShopping(shoppingItems);
@@ -1470,6 +1365,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       setFinancePeriod(financePeriodResult);
       setFinanceTransactions(transactionsResult);
       setHouseholdDocuments(documentsResult);
+      setDocumentFolders(foldersResult);
       setSubscriptions(subscriptionsResult);
       setMealPrintItems(mealPlanResult.items);
       setMealPrintWeekStart(mondayFor());
@@ -1510,6 +1406,12 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
   }, [toast]);
 
   const selectedCategory = finance.categories.find((category) => category.id === selectedCategoryId) ?? null;
+  const activeHouseholdDocuments = useMemo(() => householdDocuments.filter((document) => !document.archivedAt), [householdDocuments]);
+  const documentRelations = useMemo<DocumentRelationGroups>(() => ({
+    transactions: financeTransactions.map((transaction) => ({ id: transaction.id, label: transaction.merchant, meta: `${transactionDateLabel(transaction.occurredOn)} · ${currency.format(transaction.amount)}` })),
+    subscriptions: subscriptions.map((subscription) => ({ id: subscription.id, label: subscription.name, meta: subscription.nextPaymentOn ? `Næste betaling ${transactionDateLabel(subscription.nextPaymentOn)}` : subscriptionIntervalLabel(subscription.billingIntervalMonths) })),
+    tasks: tasks.map((task) => ({ id: String(task.id), label: task.title, meta: taskMeta(task) })),
+  }), [financeTransactions, subscriptions, tasks]);
   const title = useMemo(() => visibleNavItems.find(([key]) => key === view)?.[1] ?? (view === "household" ? "Husstanden" : "Indstillinger"), [view, visibleNavItems]);
   const displayName = user?.displayName || "Anders";
   const firstName = displayName.split(/\s+/)[0] || displayName;
@@ -1650,6 +1552,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       if (editingTransaction) await updateFinanceTransaction(householdId, user.id, editingTransaction.id, transaction);
       else await addFinanceTransaction(householdId, user.id, transaction);
       await refreshFinance();
+      await refreshDocumentArchive();
       setTransactionOpen(false);
       setEditingTransaction(null);
       setTransactionCategoryId(null);
@@ -1667,6 +1570,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
     try {
       await deleteFinanceTransaction(householdId, transactionId);
       await refreshFinance();
+      await refreshDocumentArchive();
       setTransactionOpen(false);
       setEditingTransaction(null);
       setTransactionCategoryId(null);
@@ -1691,6 +1595,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       if (editingSubscription) await updateSubscription(householdId, user.id, editingSubscription.id, subscription);
       else await addSubscription(householdId, user.id, subscription);
       await refreshSubscriptions();
+      await refreshDocumentArchive();
       setSubscriptionOpen(false);
       setEditingSubscription(null);
       setSyncState("synced");
@@ -1706,6 +1611,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
     try {
       await deleteSubscription(householdId, subscriptionId);
       await refreshSubscriptions();
+      await refreshDocumentArchive();
       setSubscriptionOpen(false);
       setEditingSubscription(null);
       setSyncState("synced");
@@ -1759,19 +1665,111 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       return null;
     }
   };
-  const saveDocument = async (file: File, documentTitle: string, kind: DocumentKind, visibility: DocumentVisibility) => {
-    if (!householdId || !user) return "Du skal være logget ind for at uploade.";
+  const refreshDocumentArchive = async () => {
+    if (!householdId) return;
+    const [documentsResult, foldersResult, transactionsResult, subscriptionsResult] = await Promise.all([loadDocuments(householdId), loadDocumentFolders(householdId), loadFinanceTransactions(householdId), loadSubscriptions(householdId)]);
+    setHouseholdDocuments(documentsResult);
+    setDocumentFolders(foldersResult);
+    setFinanceTransactions(transactionsResult);
+    setSubscriptions(subscriptionsResult);
+  };
+  const saveDocument = async (file: File, input: DocumentArchiveInput) => {
+    if (!householdId || !user) {
+      const folder = input.folderId ? documentFolders.find((candidate) => candidate.id === input.folderId) : null;
+      const id = `demo-doc-${Date.now()}`;
+      setHouseholdDocuments((documents) => [{
+        id,
+        title: input.title,
+        kind: input.kind,
+        visibility: input.visibility,
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        storagePath: "",
+        processingStatus: "ready",
+        folderId: folder?.id ?? null,
+        folderName: folder?.name ?? null,
+        folderColor: folder?.color ?? null,
+        documentDate: input.documentDate,
+        expiresOn: input.expiresOn,
+        notes: input.notes,
+        archivedAt: null,
+        createdBy: user?.id ?? "demo-user",
+        createdAt: new Date().toISOString(),
+        tags: input.tagNames.map((name, index) => ({ id: `${id}-tag-${index}`, name, color: "#7c6ee6" })),
+        linkedTransactionIds: input.transactionIds,
+        linkedSubscriptionIds: input.subscriptionIds,
+        linkedTaskIds: input.taskIds,
+      }, ...documents]);
+      setToast("Dokumentet er tilføjet i forhåndsvisningen.");
+      return true;
+    }
     setSyncState("saving");
     try {
-      await uploadDocument({ householdId, userId: user.id, file, title: documentTitle, kind, visibility });
-      setHouseholdDocuments(await loadDocuments(householdId));
-      setDocumentUploadOpen(false);
+      await uploadDocument({ householdId, userId: user.id, file, input });
+      await refreshDocumentArchive();
       setSyncState("synced");
-      return null;
-    } catch (reason) {
+      setToast("Dokumentet er uploadet.");
+      return true;
+    } catch {
       setSyncState("error");
-      return reason instanceof Error ? reason.message : "Dokumentet kunne ikke uploades.";
+      return false;
     }
+  };
+  const saveDocumentMetadata = async (document: HouseholdDocument, input: DocumentArchiveInput) => {
+    if (!householdId) {
+      const folder = input.folderId ? documentFolders.find((candidate) => candidate.id === input.folderId) : null;
+      setHouseholdDocuments((documents) => documents.map((candidate) => candidate.id === document.id ? {
+        ...candidate,
+        ...input,
+        folderName: folder?.name ?? null,
+        folderColor: folder?.color ?? null,
+        tags: input.tagNames.map((name, index) => ({ id: `${document.id}-tag-${index}`, name, color: "#7c6ee6" })),
+        linkedTransactionIds: input.transactionIds,
+        linkedSubscriptionIds: input.subscriptionIds,
+        linkedTaskIds: input.taskIds,
+      } : candidate));
+      setToast("Dokumentet er opdateret.");
+      return true;
+    }
+    setSyncState("saving");
+    try {
+      await updateDocumentArchive(householdId, document.id, input);
+      await refreshDocumentArchive();
+      setSyncState("synced");
+      setToast("Dokumentet er opdateret.");
+      return true;
+    } catch { setSyncState("error"); return false; }
+  };
+  const addDocumentFolder = async (name: string) => {
+    if (!householdId || !user) {
+      const folder = { id: `demo-folder-${Date.now()}`, name, color: "#5b6ee1" };
+      setDocumentFolders((folders) => [...folders, folder]);
+      setToast("Mappen er oprettet.");
+      return true;
+    }
+    setSyncState("saving");
+    try {
+      await createDocumentFolder(householdId, user.id, name);
+      await refreshDocumentArchive();
+      setSyncState("synced");
+      setToast("Mappen er oprettet.");
+      return true;
+    } catch { setSyncState("error"); return false; }
+  };
+  const archiveDocument = async (document: HouseholdDocument, archived: boolean) => {
+    if (!householdId) {
+      setHouseholdDocuments((documents) => documents.map((candidate) => candidate.id === document.id ? { ...candidate, archivedAt: archived ? new Date().toISOString() : null } : candidate));
+      setToast(archived ? "Dokumentet er arkiveret." : "Dokumentet er gendannet.");
+      return true;
+    }
+    setSyncState("saving");
+    try {
+      await setDocumentArchived(householdId, document.id, archived);
+      await refreshDocumentArchive();
+      setSyncState("synced");
+      setToast(archived ? "Dokumentet er arkiveret." : "Dokumentet er gendannet.");
+      return true;
+    } catch { setSyncState("error"); return false; }
   };
   const openDocument = async (document: HouseholdDocument) => {
     if (!document.storagePath) return;
@@ -1867,7 +1865,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
         </header>
 
         <main>
-          {view === "overview" ? <Overview finance={finance} actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openIncome={() => openNewTransaction(null, "income")} sampleMode={!householdId} mealItems={mealPrintItems} dataReady={!householdId || syncState === "synced"} /> : null}
+          {view === "overview" ? <Overview finance={finance} actions={actions} approve={(id) => setActions((items) => items.filter((item) => item.id !== id))} tasks={tasks} shopping={shopping} documents={activeHouseholdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} navigate={navigate} openAdd={setQuickAdd} openUpload={() => { setDocumentUploadOpen(true); navigate("documents"); }} openDocument={openDocument} openIncome={() => openNewTransaction(null, "income")} sampleMode={!householdId} mealItems={mealPrintItems} dataReady={!householdId || syncState === "synced"} /> : null}
           {view === "finance" ? (
             <div className="finance-area">
               {financeSection === "overview" ? <FinanceOverviewView finance={finance} onAddCategory={() => setCategoryOpen(true)} onAddTransaction={() => openNewTransaction()} onAddTransactionForCategory={(categoryId) => openNewTransaction(categoryId)} onEditTransaction={openTransaction} onOpenBudget={() => navigateFinance("budget")} onOpenCategory={(categoryId) => navigateFinance("category", categoryId)} onOpenTransactions={() => navigateFinance("transactions")} /> : null}
@@ -1878,7 +1876,7 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
               {financeSection === "category" && !selectedCategory ? <Panel><div className="empty-state">Kategorien findes ikke eller indlæses stadig.</div></Panel> : null}
             </div>
           ) : null}
-          {view === "documents" ? <CollectionView view="documents" tasks={tasks} shopping={shopping} documents={householdDocuments} toggleTask={householdId ? toggleTask : setLocalToggle(setTasks)} toggleShopping={householdId ? toggleShopping : setLocalToggle(setShopping)} openUpload={() => setDocumentUploadOpen(true)} openDocument={openDocument} openAdd={setQuickAdd} member={user ? { name: user.displayName, email: user.email } : undefined} sampleMode={!householdId} /> : null}
+          {view === "documents" ? <DocumentLibraryView createRequested={documentUploadOpen} currentUserId={userId} documents={householdDocuments} folders={documentFolders} isOwner={canManageChecklists} onArchive={archiveDocument} onCreateFolder={addDocumentFolder} onCreateRequestHandled={() => setDocumentUploadOpen(false)} onOpen={openDocument} onSave={saveDocumentMetadata} onUpload={saveDocument} relations={documentRelations} /> : null}
           {view === "tasks" ? <TasksView currentUserId={userId} isOwner={canManageChecklists} members={taskMembers} onDelete={removeTaskItem} onSave={saveTaskItem} onToggle={(item) => householdId ? toggleTask(item.id) : setLocalToggle(setTasks)(item.id)} tasks={tasks} /> : null}
           {view === "shopping" ? <ShoppingView currentUserId={userId} isOwner={canManageChecklists} items={shopping} onClearCompleted={clearCompletedShopping} onDelete={removeShoppingListItem} onSave={saveShoppingListItem} onToggle={(item) => householdId ? toggleShopping(item.id) : setLocalToggle(setShopping)(item.id)} /> : null}
           {view === "calendar" ? <CalendarView householdId={householdId} onSyncState={setSyncState} userId={user?.id} /> : null}
@@ -1897,7 +1895,6 @@ export function HouseholdApp({ householdId, householdName = "Mit hjem", initialP
       {transactionOpen ? <TransactionModal categories={finance.categories} documents={householdDocuments} initial={editingTransaction} preferredCategoryId={transactionCategoryId} preferredDirection={transactionDirection} onAddCategory={saveFinanceCategory} onClose={() => { setTransactionOpen(false); setEditingTransaction(null); setTransactionCategoryId(null); setTransactionDirection("expense"); }} onDelete={removeTransaction} onOpenDocument={openDocument} onSave={saveTransaction} /> : null}
       {subscriptionOpen ? <SubscriptionModal documents={householdDocuments} initial={editingSubscription} onClose={() => { setSubscriptionOpen(false); setEditingSubscription(null); }} onDelete={removeSubscription} onOpenDocument={openDocument} onSave={saveSubscription} transactions={financeTransactions} /> : null}
       {categoryOpen ? <BudgetCategoryModal onClose={() => setCategoryOpen(false)} onAdd={async (name, categoryType) => { const saved = Boolean(await saveFinanceCategory(name, categoryType)); if (saved) setCategoryOpen(false); return saved; }} /> : null}
-      {documentUploadOpen ? <DocumentUploadModal onClose={() => setDocumentUploadOpen(false)} onUpload={saveDocument} /> : null}
       {toast ? <div aria-live="polite" className="app-toast" role="status"><Check size={16} />{toast}</div> : null}
       <PrintSheets tasks={tasks} shopping={shopping} financePeriod={financePeriod} householdName={householdName} mealItems={mealPrintItems} mealWeekStart={mealPrintWeekStart} sampleMode={!householdId} />
     </div>
